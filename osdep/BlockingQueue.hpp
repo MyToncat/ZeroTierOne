@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -18,8 +18,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
-
-#include "Thread.hpp"
+#include <atomic>
+#include <vector>
 
 namespace ZeroTier {
 
@@ -67,7 +67,8 @@ public:
 	inline bool get(T &value)
 	{
 		std::unique_lock<std::mutex> lock(m);
-		if (!r) return false;
+		if (!r)
+			return false;
 		while (q.empty()) {
 			c.wait(lock);
 			if (!r) {
@@ -81,6 +82,16 @@ public:
 		return true;
 	}
 
+	inline std::vector<T> drain()
+	{
+		std::vector<T> v;
+		while (!q.empty()) {
+			v.push_back(q.front());
+			q.pop();
+		}
+		return v;
+	}
+
 	enum TimedWaitResult
 	{
 		OK,
@@ -92,7 +103,8 @@ public:
 	{
 		const std::chrono::milliseconds ms2{ms};
 		std::unique_lock<std::mutex> lock(m);
-		if (!r) return STOP;
+		if (!r)
+			return STOP;
 		while (q.empty()) {
 			if (c.wait_for(lock,ms2) == std::cv_status::timeout)
 				return ((r) ? TIMED_OUT : STOP);
@@ -104,11 +116,15 @@ public:
 		return OK;
 	}
 
+	inline size_t size() const {
+		return q.size();
+	}
+
 private:
-	volatile bool r;
 	std::queue<T> q;
 	mutable std::mutex m;
 	mutable std::condition_variable c,gc;
+	std::atomic_bool r;
 };
 
 } // namespace ZeroTier

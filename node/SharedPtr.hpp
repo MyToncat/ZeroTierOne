@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -37,8 +37,9 @@ public:
 	~SharedPtr()
 	{
 		if (_ptr) {
-			if (--_ptr->__refCount <= 0)
+			if (--_ptr->__refCount <= 0) {
 				delete _ptr;
+			}
 		}
 	}
 
@@ -47,8 +48,9 @@ public:
 		if (_ptr != sp._ptr) {
 			T *p = sp._getAndInc();
 			if (_ptr) {
-				if (--_ptr->__refCount <= 0)
+				if (--_ptr->__refCount <= 0) {
 					delete _ptr;
+				}
 			}
 			_ptr = p;
 		}
@@ -97,8 +99,9 @@ public:
 	inline void zero()
 	{
 		if (_ptr) {
-			if (--_ptr->__refCount <= 0)
+			if (--_ptr->__refCount <= 0) {
 				delete _ptr;
+			}
 			_ptr = (T *)0;
 		}
 	}
@@ -108,8 +111,9 @@ public:
 	 */
 	inline int references()
 	{
-		if (_ptr)
+		if (_ptr) {
 			return _ptr->__refCount.load();
+		}
 		return 0;
 	}
 
@@ -123,8 +127,9 @@ public:
 private:
 	inline T *_getAndInc() const
 	{
-		if (_ptr)
+		if (_ptr) {
 			++_ptr->__refCount;
+		}
 		return _ptr;
 	}
 	T *_ptr;

@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -23,9 +23,9 @@
 
 // For the struct sockaddr_storage structure
 #if defined(_WIN32) || defined(_WIN64)
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-#include <Windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 #else /* not Windows */
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -84,7 +84,12 @@ extern "C" {
 /**
  * Minimum UDP payload size allowed
  */
-#define ZT_MIN_PHYSMTU 1400
+#define ZT_MIN_PHYSMTU 510
+
+/**
+ * Maximum physical interface name length. This number is gigantic because of Windows.
+ */
+#define ZT_MAX_PHYSIFNAME 256
 
 /**
  * Default UDP payload size (physical path MTU) not including UDP and IP overhead
@@ -123,12 +128,12 @@ extern "C" {
 /**
  * Maximum number of pushed routes on a network
  */
-#define ZT_MAX_NETWORK_ROUTES 32
+#define ZT_MAX_NETWORK_ROUTES 128
 
 /**
  * Maximum number of statically assigned IP addresses per network endpoint using ZT address management (not DHCP)
  */
-#define ZT_MAX_ZT_ASSIGNED_ADDRESSES 16
+#define ZT_MAX_ZT_ASSIGNED_ADDRESSES 32
 
 /**
  * Maximum number of "specialists" on a network -- bridges, relays, etc.
@@ -163,7 +168,7 @@ extern "C" {
 /**
  * Maximum number of direct network paths to a given peer
  */
-#define ZT_MAX_PEER_NETWORK_PATHS 16
+#define ZT_MAX_PEER_NETWORK_PATHS 64
 
 /**
  * Maximum number of path configurations that can be set
@@ -194,6 +199,11 @@ extern "C" {
  * Maximum value for link quality (min is 0)
  */
 #define ZT_PATH_LINK_QUALITY_MAX 0xff
+
+/**
+ * Maximum number of DNS servers per domain
+ */
+#define ZT_MAX_DNS_SERVERS 4
 
 /**
  * Packet characteristics flag: packet direction, 1 if inbound 0 if outbound
@@ -374,7 +384,7 @@ enum ZT_ResultCode
 	 */
 	ZT_RESULT_OK_IGNORED = 1,
 
-	// Fatal errors (>100, <1000)
+	// Fatal errors (>=100, <1000)
 
 	/**
 	 * Ran out of memory
@@ -414,35 +424,6 @@ enum ZT_ResultCode
  * @return True if result code indicates a fatal error
  */
 #define ZT_ResultCode_isFatal(x) ((((int)(x)) >= 100)&&(((int)(x)) < 1000))
-
-/**
- * The multipath algorithm in use by this node.
- */
-enum ZT_MultipathMode
-{
-	/**
-	 * No active multipath.
-	 *
-	 * Traffic is merely sent over the strongest path. That being
-	 * said, this mode will automatically failover in the event that a link goes down.
-	 */
-	ZT_MULTIPATH_NONE = 0,
-
-	/**
-	 * Traffic is randomly distributed among all active paths.
-	 *
-	 * Will cease sending traffic over links that appear to be stale.
-	 */
-	ZT_MULTIPATH_RANDOM = 1,
-
-	/**
-	 * Traffic is allocated across all active paths in proportion to their strength and
-	 * reliability.
-	 *
-	 * Will cease sending traffic over links that appear to be stale.
-	 */
-	ZT_MULTIPATH_PROPORTIONALLY_BALANCED = 2,
-};
 
 /**
  * Status codes sent to status update callback when things happen
@@ -693,7 +674,12 @@ enum ZT_VirtualNetworkStatus
 	/**
 	 * ZeroTier core version too old
 	 */
-	ZT_NETWORK_STATUS_CLIENT_TOO_OLD = 5
+	ZT_NETWORK_STATUS_CLIENT_TOO_OLD = 5,
+
+	/**
+	 * External authentication is required (e.g. SSO)
+	 */
+	ZT_NETWORK_STATUS_AUTHENTICATION_REQUIRED = 6
 };
 
 /**
@@ -985,6 +971,15 @@ typedef struct
 } ZT_VirtualNetworkRoute;
 
 /**
+ * DNS configuration to be pushed on a virtual network
+ */
+typedef struct
+{
+	char domain[128];
+	struct sockaddr_storage server_addr[ZT_MAX_DNS_SERVERS];
+} ZT_VirtualNetworkDNS;
+
+/**
  * An Ethernet multicast group
  */
 typedef struct
@@ -1089,7 +1084,8 @@ enum ZT_Architecture
 	ZT_ARCHITECTURE_DOTNET_CLR = 13,
 	ZT_ARCHITECTURE_JAVA_JVM = 14,
 	ZT_ARCHITECTURE_WEB = 15,
-	ZT_ARCHITECTURE_S390X = 16
+	ZT_ARCHITECTURE_S390X = 16,
+	ZT_ARCHITECTURE_LOONGARCH64 = 17
 };
 
 /**
@@ -1198,6 +1194,63 @@ typedef struct
 		uint64_t mac; /* MAC in lower 48 bits */
 		uint32_t adi; /* Additional distinguishing information, usually zero except for IPv4 ARP groups */
 	} multicastSubscriptions[ZT_MAX_MULTICAST_SUBSCRIPTIONS];
+
+	/**
+	 * Network specific DNS configuration
+	 */
+	ZT_VirtualNetworkDNS dns;
+
+
+
+	/**
+	 * sso enabled
+	 */
+	bool ssoEnabled;
+
+	/**
+	 * SSO version
+	 */
+	uint64_t ssoVersion;
+
+	/**
+	 * If the status us AUTHENTICATION_REQUIRED, this may contain a URL for authentication.
+	 */
+	char authenticationURL[2048];
+
+	/**
+	 * Time that current authentication expires. only valid if ssoEnabled is true
+	 */
+	uint64_t authenticationExpiryTime;
+
+	/**
+	 * OIDC issuer URL.
+	 */
+	char issuerURL[2048];
+
+	/**
+	 * central base URL.
+	 */
+	char centralAuthURL[2048];
+
+	/**
+	 * sso nonce
+	 */
+	char ssoNonce[128];
+
+	/**
+	 * sso state
+	 */
+	char ssoState[256];
+
+	/**
+	 * oidc client id
+	 */
+	char ssoClientID[256];
+
+	/**
+	 * sso provider
+	 **/
+	char ssoProvider[64];
 } ZT_VirtualNetworkConfig;
 
 /**
@@ -1250,59 +1303,79 @@ typedef struct
 	uint64_t trustedPathId;
 
 	/**
-	 * One-way latency
+	 * Mean latency
 	 */
-	float latency;
+	float latencyMean;
 
 	/**
-	 * How much latency varies over time
+	 * Maximum observed latency
 	 */
-	float packetDelayVariance;
+	float latencyMax;
 
 	/**
-	 * How much observed throughput varies over time
+	 * Variance of latency
 	 */
-	float throughputDisturbCoeff;
+	float latencyVariance;
 
 	/**
-	 * Packet Error Ratio (PER)
-	 */
-	float packetErrorRatio;
-
-	/**
-	 * Packet Loss Ratio (PLR)
+	 * Packet loss ratio
 	 */
 	float packetLossRatio;
 
 	/**
-	 * Stability of the path
+	 * Packet error ratio
 	 */
-	float stability;
+	float packetErrorRatio;
 
 	/**
-	 * Current throughput (moving average)
+	 * Number of flows assigned to this path
 	 */
-	uint64_t throughput;
+	uint16_t assignedFlowCount;
 
 	/**
-	 * Maximum observed throughput for this path
+	 * Address scope
 	 */
-	uint64_t maxThroughput;
+	uint8_t scope;
 
 	/**
-	 * Percentage of traffic allocated to this path
+	 * Relative quality value
 	 */
-	float allocation;
+	float relativeQuality;
 
 	/**
-	 * Name of physical interface (for monitoring)
+	 * Name of physical interface this path resides on
 	 */
-	char *ifname;
+	char ifname[ZT_MAX_PHYSIFNAME];
+
+	/**
+	 * Pointer to PhySocket object for this path
+	 */
+	uint64_t localSocket;
+
+	/**
+	 * Local port corresponding to this path's localSocket
+	 */
+	uint16_t localPort;
 
 	/**
 	 * Is path expired?
 	 */
 	int expired;
+
+	/**
+	 * Whether this path is currently included in the bond
+	 */
+	uint8_t bonded;
+
+	/**
+	 * Whether this path is currently eligible to be used in a bond
+	 */
+	uint8_t eligible;
+
+	/**
+	 * The capacity of this link (as given to bonding layer)
+	 */
+	uint32_t linkSpeed;
 
 	/**
 	 * Is path preferred?
@@ -1346,14 +1419,34 @@ typedef struct
 	enum ZT_PeerRole role;
 
 	/**
+	 * Whether a multi-link bond has formed
+	 */
+	bool isBonded;
+
+	/**
+	 * The bonding policy used to bond to this peer
+	 */
+	int bondingPolicy;
+
+	/**
+	 * The number of links that comprise the bond to this peer that are considered alive
+	 */
+	int numAliveLinks;
+
+	/**
+	 * The number of links that comprise the bond to this peer
+	 */
+	int numTotalLinks;
+
+	/**
+	 * The user-specified bond template name
+	 */
+	char customBondName[32];
+
+	/**
 	 * Number of paths (size of paths[])
 	 */
 	unsigned int pathCount;
-
-	/**
-	 * Whether this peer was ever reachable via an aggregate link
-	 */
-	bool hadAggregateLink;
 
 	/**
 	 * Known network paths to peer
@@ -1991,7 +2084,7 @@ ZT_SDK_API int ZT_Node_sendUserMessage(ZT_Node *node,void *tptr,uint64_t dest,ui
  * NetworkConfigMaster base class in node/. No type checking is performed,
  * so a pointer to anything else will result in a crash.
  *
- * @param node ZertTier One node
+ * @param node ZeroTier One node
  * @param networkConfigMasterInstance Instance of NetworkConfigMaster C++ class or NULL to disable
  * @return OK (0) or error code if a fatal error condition has occurred
  */

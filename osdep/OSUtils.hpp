@@ -1,10 +1,10 @@
 /*
- * Copyright (c)2019 ZeroTier, Inc.
+ * Copyright (c)2013-2020 ZeroTier, Inc.
  *
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -28,9 +28,9 @@
 #include "../node/InetAddress.hpp"
 
 #ifdef __WINDOWS__
-#include <WinSock2.h>
-#include <Windows.h>
-#include <Shlwapi.h>
+#include <winsock2.h>
+#include <windows.h>
+#include <shlwapi.h>
 #else
 #include <unistd.h>
 #include <errno.h>
@@ -43,7 +43,7 @@
 #endif
 
 #ifndef OMIT_JSON_SUPPORT
-#include "../ext/json/json.hpp"
+#include <nlohmann/json.hpp>
 #endif
 
 namespace ZeroTier {
@@ -67,6 +67,22 @@ public:
 	 * @throws std::length_error buf[] too short (buf[] will still be left null-terminated)
 	 */
 	static unsigned int ztsnprintf(char *buf,unsigned int len,const char *fmt,...);
+
+	/**
+	 * Converts a uint64_t network ID into a string
+	 * 
+	 * @param nwid network ID
+	 * @throws std::length_error buf[] too short (buf[] will still be left null-terminated)
+	 */
+	static std::string networkIDStr(const uint64_t nwid);
+
+	/**
+	 * Converts a uint64_t node ID into a string
+	 * 
+	 * @param nid node ID
+	 * @throws std::length_error buf[] too short (buf[] will still be left null-terminated)
+	 */
+	static std::string nodeIDStr(const uint64_t nid);
 
 #ifdef __UNIX_LIKE__
 	/**
@@ -211,11 +227,7 @@ public:
 		return (int64_t)( ((tmp.QuadPart - 116444736000000000LL) / 10000L) + st.wMilliseconds );
 #else
 		struct timeval tv;
-#ifdef __LINUX__
-		syscall(SYS_gettimeofday,&tv,0); /* fix for musl libc broken gettimeofday bug */
-#else
 		gettimeofday(&tv,(struct timezone *)0);
-#endif
 		return ( (1000LL * (int64_t)tv.tv_sec) + (int64_t)(tv.tv_usec / 1000) );
 #endif
 	};
@@ -277,6 +289,7 @@ public:
 	static nlohmann::json jsonParse(const std::string &buf);
 	static std::string jsonDump(const nlohmann::json &j,int indentation = 1);
 	static uint64_t jsonInt(const nlohmann::json &jv,const uint64_t dfl);
+	static double jsonDouble(const nlohmann::json &jv,const double dfl);
 	static uint64_t jsonIntHex(const nlohmann::json &jv,const uint64_t dfl);
 	static bool jsonBool(const nlohmann::json &jv,const bool dfl);
 	static std::string jsonString(const nlohmann::json &jv,const char *dfl);

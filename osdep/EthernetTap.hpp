@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -23,6 +23,8 @@
 #include <memory>
 #include <vector>
 
+#define GETIFADDRS_CACHE_TIME 1000
+
 namespace ZeroTier {
 
 class EthernetTap
@@ -30,6 +32,8 @@ class EthernetTap
 public:
 	static std::shared_ptr<EthernetTap> newInstance(
 		const char *tapDeviceType, // OS-specific, NULL for default
+		unsigned int concurrency,
+		bool pinning,
 		const char *homePath,
 		const MAC &mac,
 		unsigned int mtu,
@@ -51,8 +55,10 @@ public:
 	virtual void put(const MAC &from,const MAC &to,unsigned int etherType,const void *data,unsigned int len) = 0;
 	virtual std::string deviceName() const = 0;
 	virtual void setFriendlyName(const char *friendlyName) = 0;
+	virtual std::string friendlyName() const;
 	virtual void scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed) = 0;
 	virtual void setMtu(unsigned int mtu) = 0;
+	virtual void setDns(const char *domain, const std::vector<InetAddress> &servers) = 0;
 };
 
 } // namespace ZeroTier

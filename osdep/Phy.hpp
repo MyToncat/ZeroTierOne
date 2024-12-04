@@ -1,10 +1,10 @@
 /*
- * Copyright (c)2019 ZeroTier, Inc.
+ * Copyright (c)2013-2020 ZeroTier, Inc.
  *
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -23,9 +23,9 @@
 
 #if defined(_WIN32) || defined(_WIN64)
 
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-#include <Windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 
 #define ZT_PHY_SOCKFD_TYPE SOCKET
 #define ZT_PHY_SOCKFD_NULL (INVALID_SOCKET)
@@ -49,6 +49,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+
+#include "../node/Metrics.hpp"
 
 #if defined(__linux__) || defined(linux) || defined(__LINUX__) || defined(__linux)
 #ifndef IPV6_DONTFRAG
@@ -140,12 +142,12 @@ private:
 	};
 
 	struct PhySocketImpl {
-		PhySocketImpl() { memset(ifname, 0, sizeof(ifname)); }
+		PhySocketImpl() {}
 		PhySocketType type;
 		ZT_PHY_SOCKFD_TYPE sock;
 		void *uptr; // user-settable pointer
+		uint16_t localPort;
 		ZT_PHY_SOCKADDR_STORAGE_TYPE saddr; // remote for TCP_OUT and TCP_IN, local for TCP_LISTEN, RAW, and UDP
-		char ifname[16];
 	};
 
 	std::list<PhySocketImpl> _socks;
@@ -229,76 +231,30 @@ public:
 	 * @param s Socket object
 	 * @return Underlying OS-type (usually int or long) file descriptor associated with object
 	 */
-	static inline ZT_PHY_SOCKFD_TYPE getDescriptor(PhySocket *s) throw() { return reinterpret_cast<PhySocketImpl *>(s)->sock; }
+	static inline ZT_PHY_SOCKFD_TYPE getDescriptor(PhySocket* s) throw()
+	{
+		return reinterpret_cast<PhySocketImpl*>(s)->sock;
+	}
 
 	/**
 	 * @param s Socket object
 	 * @return Pointer to user object
 	 */
-	static inline void** getuptr(PhySocket *s) throw() { return &(reinterpret_cast<PhySocketImpl *>(s)->uptr); }
-
-	/**
-	 * @param s Socket object
-	 * @param nameBuf Buffer to store name of interface which this Socket object is bound to
-	 * @param buflen Length of buffer to copy name into
-	 */
-	static inline void getIfName(PhySocket *s, char *nameBuf, int buflen)
+	static inline void** getuptr(PhySocket* s) throw()
 	{
-		if (s) {
-			memcpy(nameBuf, reinterpret_cast<PhySocketImpl *>(s)->ifname, buflen);
-		}
+		return &(reinterpret_cast<PhySocketImpl*>(s)->uptr);
 	}
 
 	/**
-	 * @param s Socket object
-	 * @param ifname Buffer containing name of interface that this Socket object is bound to
-	 * @param len Length of name of interface
-	 */
-	static inline void setIfName(PhySocket *s, char *ifname, int len)
-	{
-		if (s) {
-			memcpy(&(reinterpret_cast<PhySocketImpl *>(s)->ifname), ifname, len);
-		}
-	}
-
-	/**
-	 * Whether or not the socket object is in a closed state
+	 * Return the local port corresponding to this PhySocket
 	 *
 	 * @param s Socket object
-	 * @return true if socket is closed, false if otherwise
-	 */
-	inline bool isClosed(PhySocket *s)
-	{
-		PhySocketImpl *sws = (reinterpret_cast<PhySocketImpl *>(s));
-		return sws->type == ZT_PHY_SOCKET_CLOSED;
-	}
-
-	/**
-	 * Get state of socket object
 	 *
-	 * @param s Socket object
-	 * @return State of socket
+	 * @return Local port corresponding to this PhySocket
 	 */
-	inline int getState(PhySocket *s)
+	static inline uint16_t getLocalPort(PhySocket* s) throw()
 	{
-		PhySocketImpl *sws = (reinterpret_cast<PhySocketImpl *>(s));
-		return sws->type;
-	}
-
-	/**
-	 * In the event that this socket is erased, we need a way to convey to the multipath logic
-	 * that this path is no longer valid.
-	 *
-	 * @param s Socket object
-	 * @return Whether the state of this socket is within an acceptable range of values
-	 */
-	inline bool isValidState(PhySocket *s)
-	{
-		if (s) {
-			PhySocketImpl *sws = (reinterpret_cast<PhySocketImpl *>(s));
-			return sws->type >= ZT_PHY_SOCKET_CLOSED && sws->type <= ZT_PHY_SOCKET_UNIX_LISTEN;
-		}
-		return false;
+		return reinterpret_cast<PhySocketImpl*>(s)->localPort;
 	}
 
 	/**
@@ -310,21 +266,27 @@ public:
 	inline void whack()
 	{
 #if defined(_WIN32) || defined(_WIN64)
-		::send(_whackSendSocket,(const char *)this,1,0);
+		::send(_whackSendSocket, (const char*)this, 1, 0);
 #else
-		(void)(::write(_whackSendSocket,(PhySocket *)this,1));
+		(void)(::write(_whackSendSocket, (PhySocket*)this, 1));
 #endif
 	}
 
 	/**
 	 * @return Number of open sockets
 	 */
-	inline unsigned long count() const throw() { return _socks.size(); }
+	inline unsigned long count() const throw()
+	{
+		return _socks.size();
+	}
 
 	/**
 	 * @return Maximum number of sockets allowed
 	 */
-	inline unsigned long maxCount() const throw() { return ZT_PHY_MAX_SOCKETS; }
+	inline unsigned long maxCount() const throw()
+	{
+		return ZT_PHY_MAX_SOCKETS;
+	}
 
 	/**
 	 * Wrap a raw file descriptor in a PhySocket structure
@@ -391,14 +353,14 @@ public:
 				int tmpbs = bs;
 				if (setsockopt(s,SOL_SOCKET,SO_RCVBUF,(const char *)&tmpbs,sizeof(tmpbs)) == 0)
 					break;
-				bs -= 16384;
+				bs -= 4096;
 			}
 			bs = bufferSize;
 			while (bs >= 65536) {
 				int tmpbs = bs;
 				if (setsockopt(s,SOL_SOCKET,SO_SNDBUF,(const char *)&tmpbs,sizeof(tmpbs)) == 0)
 					break;
-				bs -= 16384;
+				bs -= 4096;
 			}
 		}
 
@@ -468,6 +430,11 @@ public:
 		sws.type = ZT_PHY_SOCKET_UDP;
 		sws.sock = s;
 		sws.uptr = uptr;
+
+#ifdef __UNIX_LIKE__
+		struct sockaddr_in *sin = (struct sockaddr_in *)localAddress;
+		sws.localPort = htons(sin->sin_port);
+#endif
 		memset(&(sws.saddr),0,sizeof(struct sockaddr_storage));
 		memcpy(&(sws.saddr),localAddress,(localAddress->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in));
 
@@ -504,11 +471,33 @@ public:
 	inline bool udpSend(PhySocket *sock,const struct sockaddr *remoteAddress,const void *data,unsigned long len)
 	{
 		PhySocketImpl &sws = *(reinterpret_cast<PhySocketImpl *>(sock));
+		bool sent = false;
 #if defined(_WIN32) || defined(_WIN64)
-		return ((long)::sendto(sws.sock,reinterpret_cast<const char *>(data),len,0,remoteAddress,(remoteAddress->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in)) == (long)len);
+		sent = ((long)::sendto(
+				sws.sock,
+				reinterpret_cast<const char *>(data),
+				len,
+				0,
+				remoteAddress,
+				(remoteAddress->sa_family == AF_INET6) ? 
+					sizeof(struct sockaddr_in6) : 
+					sizeof(struct sockaddr_in)) == (long)len);
 #else
-		return ((long)::sendto(sws.sock,data,len,0,remoteAddress,(remoteAddress->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in)) == (long)len);
+		sent = ((long)::sendto(
+				sws.sock,
+				data,
+				len,
+				0,
+				remoteAddress,
+				(remoteAddress->sa_family == AF_INET6) ? 
+					sizeof(struct sockaddr_in6) : 
+				 	sizeof(struct sockaddr_in)) == (long)len);
 #endif
+		if (sent) {
+			Metrics::udp_send += len;
+		}
+
+		return sent;
 	}
 
 #ifdef __UNIX_LIKE__
@@ -1017,18 +1006,61 @@ public:
 					break;
 
 				case ZT_PHY_SOCKET_UDP:
-					if (FD_ISSET(s->sock,&rfds)) {
-						for(int k=0;k<1024;++k) {
-							memset(&ss,0,sizeof(ss));
+					if (FD_ISSET(s->sock, &rfds)) {
+#if (defined(__linux__) || defined(linux) || defined(__linux)) && defined(MSG_WAITFORONE)
+#define RECVMMSG_WINDOW_SIZE 128
+#define RECVMMSG_BUF_SIZE	 1500
+						iovec iovs[RECVMMSG_WINDOW_SIZE];
+						uint8_t bufs[RECVMMSG_WINDOW_SIZE][RECVMMSG_BUF_SIZE];
+						sockaddr_storage addrs[RECVMMSG_WINDOW_SIZE];
+						memset(addrs, 0, sizeof(addrs));
+						mmsghdr mm[RECVMMSG_WINDOW_SIZE];
+						memset(mm, 0, sizeof(mm));
+						for (int i = 0; i < RECVMMSG_WINDOW_SIZE; ++i) {
+							iovs[i].iov_base = (void*)bufs[i];
+							iovs[i].iov_len = RECVMMSG_BUF_SIZE;
+							mm[i].msg_hdr.msg_name = (void*)&(addrs[i]);
+							mm[i].msg_hdr.msg_iov = &(iovs[i]);
+							mm[i].msg_hdr.msg_iovlen = 1;
+						}
+						for (int k = 0; k < 1024; ++k) {
+							for (int i = 0; i < RECVMMSG_WINDOW_SIZE; ++i) {
+								mm[i].msg_hdr.msg_namelen = sizeof(sockaddr_storage);
+								mm[i].msg_len = 0;
+							}
+							int received_count = recvmmsg(s->sock, mm, RECVMMSG_WINDOW_SIZE, MSG_WAITFORONE, nullptr);
+							if (received_count > 0) {
+								for (int i = 0; i < received_count; ++i) {
+									long n = (long)mm[i].msg_len;
+									if (n > 0) {
+										try {
+											_handler->phyOnDatagram((PhySocket*)&(*s), &(s->uptr), (const struct sockaddr*)&(s->saddr), (const struct sockaddr*)&(addrs[i]), bufs[i], (unsigned long)n);
+										}
+										catch (...) {
+										}
+									}
+								}
+							}
+							else {
+								break;
+							}
+						}
+#else
+						for (int k = 0; k < 1024; ++k) {
+							memset(&ss, 0, sizeof(ss));
 							socklen_t slen = sizeof(ss);
-							long n = (long)::recvfrom(s->sock,buf,sizeof(buf),0,(struct sockaddr *)&ss,&slen);
+							long n = (long)::recvfrom(s->sock, buf, sizeof(buf), 0, (struct sockaddr*)&ss, &slen);
 							if (n > 0) {
 								try {
-									_handler->phyOnDatagram((PhySocket *)&(*s),&(s->uptr),(const struct sockaddr *)&(s->saddr),(const struct sockaddr *)&ss,(void *)buf,(unsigned long)n);
-								} catch ( ... ) {}
-							} else if (n < 0)
+									_handler->phyOnDatagram((PhySocket*)&(*s), &(s->uptr), (const struct sockaddr*)&(s->saddr), (const struct sockaddr*)&ss, (void*)buf, (unsigned long)n);
+								}
+								catch (...) {
+								}
+							}
+							else if (n < 0)
 								break;
 						}
+#endif
 					}
 					break;
 

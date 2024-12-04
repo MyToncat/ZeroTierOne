@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -15,14 +15,14 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <WinSock2.h>
-#include <Windows.h>
+#include <winsock2.h>
+#include <windows.h>
 #include <tchar.h>
 #include <malloc.h>
 #include <winreg.h>
 #include <wchar.h>
 #include <ws2ipdef.h>
-#include <WS2tcpip.h>
+#include <ws2tcpip.h>
 #include <IPHlpApi.h>
 #include <nldef.h>
 #include <netioapi.h>
@@ -44,6 +44,7 @@
 #include "OSUtils.hpp"
 
 #include "..\windows\TapDriver6\tap-windows.h"
+#include "WinDNSHelper.hpp"
 
 #include <netcon.h>
 
@@ -77,7 +78,7 @@ public:
 	{
 #ifdef _WIN64
 		is64Bit = TRUE;
-		tapDriverPath = "\\tap-windows\\x64\\zttap300.inf";
+		//tapDriverPath = "\\tap-windows\\x64\\zttap300.inf";
 #else
 		is64Bit = FALSE;
 		IsWow64Process(GetCurrentProcess(),&is64Bit);
@@ -85,9 +86,10 @@ public:
 			fprintf(stderr,"FATAL: you must use the 64-bit ZeroTier One service on 64-bit Windows systems\r\n");
 			_exit(1);
 		}
-		tapDriverPath = "\\tap-windows\\x86\\zttap300.inf";
+		//tapDriverPath = "\\tap-windows\\x86\\zttap300.inf";
 #endif
 		tapDriverName = "zttap300";
+		tapDriverPath = "\\zttap300.inf";
 
 		setupApiMod = LoadLibraryA("setupapi.dll");
 		if (!setupApiMod) {
@@ -466,7 +468,8 @@ WindowsEthernetTap::WindowsEthernetTap(
 	_pathToHelpers(hp),
 	_run(true),
 	_initialized(false),
-	_enabled(true)
+	_enabled(true),
+	_lastIfAddrsUpdate(0)
 {
 	char subkeyName[1024];
 	char subkeyClass[1024];
@@ -646,6 +649,7 @@ WindowsEthernetTap::WindowsEthernetTap(
 
 WindowsEthernetTap::~WindowsEthernetTap()
 {
+	WinDNSHelper::removeDNS(_nwid);
 	_run = false;
 	ReleaseSemaphore(_injectSemaphore,1,NULL);
 	Thread::join(_thread);
@@ -747,6 +751,14 @@ std::vector<InetAddress> WindowsEthernetTap::ips() const
 	if (!_initialized)
 		return addrs;
 
+	uint64_t now = OSUtils::now();
+
+	if ((now - _lastIfAddrsUpdate) <= GETIFADDRS_CACHE_TIME) {
+		return _ifaddrs;
+	}
+
+	_lastIfAddrsUpdate = now;
+
 	try {
 		MIB_UNICASTIPADDRESS_TABLE *ipt = (MIB_UNICASTIPADDRESS_TABLE *)0;
 		if (GetUnicastIpAddressTable(AF_UNSPEC,&ipt) == NO_ERROR) {
@@ -774,6 +786,8 @@ std::vector<InetAddress> WindowsEthernetTap::ips() const
 
 	std::sort(addrs.begin(),addrs.end());
 	addrs.erase(std::unique(addrs.begin(),addrs.end()),addrs.end());
+
+	_ifaddrs = addrs;
 
 	return addrs;
 }
@@ -808,19 +822,14 @@ void WindowsEthernetTap::setFriendlyName(const char *dn)
 {
 	if (!_initialized)
 		return;
+
 	HKEY ifp;
 	if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,(std::string("SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\") + _netCfgInstanceId).c_str(),0,KEY_READ|KEY_WRITE,&ifp) == ERROR_SUCCESS) {
 		RegSetKeyValueA(ifp,"Connection","Name",REG_SZ,(LPCVOID)dn,(DWORD)(strlen(dn)+1));
 		RegCloseKey(ifp);
 	}
 
-	HRESULT hr = CoInitialize(nullptr);
-	if (hr != S_OK) return;
-	CoInitializeSecurity(NULL, -1, NULL, NULL,
-		RPC_C_AUTHN_LEVEL_PKT,
-		RPC_C_IMP_LEVEL_IMPERSONATE,
-		NULL, EOAC_NONE, NULL);
-	if (hr != S_OK) return;
+	HRESULT hr = S_OK;
 
 	INetSharingManager *nsm;
 	hr = CoCreateInstance(__uuidof(NetSharingManager), NULL, CLSCTX_ALL, __uuidof(INetSharingManager), (void**)&nsm);
@@ -853,12 +862,14 @@ void WindowsEthernetTap::setFriendlyName(const char *dn)
 					NETCON_PROPERTIES *ncp = nullptr;
 					nc->GetProperties(&ncp);
 
-					GUID curId = ncp->guidId;
-					if (curId == _deviceGuid) {
-						wchar_t wtext[255];
-						mbstowcs(wtext, dn, strlen(dn)+1);
-						nc->Rename(wtext);
-						found = true;
+					if (ncp != nullptr) {
+						GUID curId = ncp->guidId;
+						if (curId == _deviceGuid) {
+							wchar_t wtext[255];
+							mbstowcs(wtext, dn, strlen(dn)+1);
+							nc->Rename(wtext);
+							found = true;
+						}
 					}
 					nc->Release();
 				}
@@ -868,6 +879,16 @@ void WindowsEthernetTap::setFriendlyName(const char *dn)
 		ev->Release();
 	}
 	nsecc->Release();
+
+	_friendlyName_m.lock();
+	_friendlyName = dn;
+	_friendlyName_m.unlock();
+}
+
+std::string WindowsEthernetTap::friendlyName() const
+{
+	Mutex::Lock l(_friendlyName_m);
+	return _friendlyName;
 }
 
 void WindowsEthernetTap::scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed)
@@ -944,6 +965,12 @@ NET_IFINDEX WindowsEthernetTap::interfaceIndex() const
 void WindowsEthernetTap::threadMain()
 	throw()
 {
+	HRESULT hres = CoInitializeEx(0, COINIT_MULTITHREADED);
+	if (FAILED(hres)) {
+		fprintf(stderr, "WinEthernetTap: COM initialization failed");
+		return;
+	}
+
 	char tapReadBuf[ZT_MAX_MTU + 32];
 	char tapPath[128];
 	HANDLE wait4[3];
@@ -1162,6 +1189,7 @@ void WindowsEthernetTap::threadMain()
 			// We will restart and re-open the tap unless _run == false
 		}
 	} catch ( ... ) {} // catch unexpected exceptions -- this should not happen but would prevent program crash or other weird issues since threads should not throw
+	CoUninitialize();
 }
 
 NET_IFINDEX WindowsEthernetTap::_getDeviceIndex()
@@ -1288,6 +1316,11 @@ void WindowsEthernetTap::_syncIps()
 			}
 		}
 	}
+}
+
+void WindowsEthernetTap::setDns(const char* domain, const std::vector<InetAddress>& servers)
+{
+	WinDNSHelper::setDNS(_nwid, domain, servers);
 }
 
 } // namespace ZeroTier

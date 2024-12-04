@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -50,20 +50,27 @@ void OutboundMulticast::init(
 	_frameLen = (len < ZT_MAX_MTU) ? len : ZT_MAX_MTU;
 	_etherType = etherType;
 
-	if (gatherLimit) flags |= 0x02;
+	if (gatherLimit) {
+		flags |= 0x02;
+	}
 
 	_packet.setSource(RR->identity.address());
 	_packet.setVerb(Packet::VERB_MULTICAST_FRAME);
 	_packet.append((uint64_t)nwid);
 	_packet.append(flags);
-	if (gatherLimit) _packet.append((uint32_t)gatherLimit);
-	if (src) src.appendTo(_packet);
+	if (gatherLimit) {
+		_packet.append((uint32_t)gatherLimit);
+	}
+	if (src) {
+		src.appendTo(_packet);
+	}
 	dest.mac().appendTo(_packet);
 	_packet.append((uint32_t)dest.adi());
 	_packet.append((uint16_t)etherType);
 	_packet.append(payload,_frameLen);
-	if (!disableCompression)
+	if (!disableCompression) {
 		_packet.compress();
+	}
 
 	memcpy(_frameData,payload,_frameLen);
 }

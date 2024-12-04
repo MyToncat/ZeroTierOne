@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <stdexcept>
+#include <thread>
 
 #include "../node/Constants.hpp"
 #include "../node/MulticastGroup.hpp"
@@ -34,6 +35,8 @@ class BSDEthernetTap : public EthernetTap
 public:
 	BSDEthernetTap(
 		const char *homePath,
+		unsigned int concurrency,
+		bool pinning,
 		const MAC &mac,
 		unsigned int mtu,
 		unsigned int metric,
@@ -54,6 +57,7 @@ public:
 	virtual void setFriendlyName(const char *friendlyName);
 	virtual void scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed);
 	virtual void setMtu(unsigned int mtu);
+	virtual void setDns(const char *domain, const std::vector<InetAddress> &servers) {}
 
 	void threadMain()
 		throw();
@@ -61,6 +65,8 @@ public:
 private:
 	void (*_handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int);
 	void *_arg;
+	unsigned int _concurrency;
+	bool _pinning;
 	uint64_t _nwid;
 	Thread _thread;
 	std::string _dev;
@@ -70,6 +76,9 @@ private:
 	int _fd;
 	int _shutdownSignalPipe[2];
 	volatile bool _enabled;
+	mutable std::vector<InetAddress> _ifaddrs;
+	mutable uint64_t _lastIfAddrsUpdate;
+	std::vector<std::thread> _rxThreads;
 };
 
 } // namespace ZeroTier

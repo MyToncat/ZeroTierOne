@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -47,7 +47,7 @@
 #include "osdep/PortMapper.hpp"
 #include "osdep/Thread.hpp"
 
-#ifdef ZT_USE_X64_ASM_SALSA2012
+#if defined(ZT_USE_X64_ASM_SALSA2012) && defined(ZT_ARCH_X64)
 #include "ext/x64-salsa2012-asm/salsa2012.h"
 #endif
 #ifdef ZT_USE_ARM32_NEON_ASM_SALSA2012
@@ -198,12 +198,12 @@ static int testCrypto()
 			bytes += 1234567.0;
 		}
 		uint64_t end = OSUtils::now();
-		SHA512::hash(buf1,bb,1234567);
+		SHA512(buf1,bb,1234567);
 		std::cout << ((bytes / 1048576.0) / ((long double)(end - start) / 1024.0)) << " MiB/second (" << Utils::hex(buf1,16,hexbuf) << ')' << std::endl;
 		::free((void *)bb);
 	}
 
-#ifdef ZT_USE_X64_ASM_SALSA2012
+#if defined(ZT_USE_X64_ASM_SALSA2012) && defined(ZT_ARCH_X64)
 	std::cout << "[crypto] Benchmarking Salsa20/12 fast x64 ASM... "; std::cout.flush();
 	{
 		unsigned char *bb = (unsigned char *)::malloc(1234567);
@@ -250,13 +250,67 @@ static int testCrypto()
 			bytes += 1234567.0;
 		}
 		uint64_t end = OSUtils::now();
-		SHA512::hash(buf1,bb,1234567);
+		SHA512(buf1,bb,1234567);
 		std::cout << ((bytes / 1048576.0) / ((long double)(end - start) / 1024.0)) << " MiB/second (" << Utils::hex(buf1,16,hexbuf) << ')' << std::endl;
 		::free((void *)bb);
 	}
 
+	/*
+	{
+		AES k0,k1;
+		k0.init("00000000000000000000000000000000");
+		k1.init("11111111111111111111111111111111");
+		uint8_t test_pt[65536];
+		uint8_t test_ct[65536];
+		uint8_t test_aad[65536];
+		uint8_t ct_hash[48];
+		char hex_tmp[128];
+		for(unsigned int i=0;i<65536;++i) {
+			test_pt[i] = (uint8_t)i;
+			test_aad[i] = (uint8_t)i;
+		}
+		AES::GMACSIVEncryptor enc(k0,k1);
+		for(unsigned int test_length=0;test_length<65536;test_length+=777) {
+			memset(test_ct, 0, test_length);
+			enc.init((uint64_t)test_length, test_ct);
+			enc.aad(test_aad, test_length);
+			enc.update1(test_pt, test_length);
+			enc.finish1();
+			enc.update2(test_pt, test_length);
+			const void *tag = enc.finish2();
+			SHA384(ct_hash, test_ct, test_length);
+			std::cout << "(" << test_length << ", \"" << Utils::hex(ct_hash, 48, hex_tmp) << "\", \"" << Utils::hex(tag, 16, hex_tmp) << "\")," <<std::endl;
+		}
+	}
+	*/
+
+	std::cout << "[crypto] Benchmarking AES-GMAC-SIV... "; std::cout.flush();
+	{
+		uint64_t end,start = OSUtils::now();
+		uint64_t bytes = 0;
+		AES k0,k1;
+		k0.init(buf1);
+		k1.init(buf2);
+		AES::GMACSIVEncryptor enc(k0,k1);
+		for (;;) {
+			for(unsigned int i=0;i<10000;++i) {
+				enc.init(i,buf2);
+				enc.update1(buf1,sizeof(buf1));
+				enc.finish1();
+				enc.update2(buf1,sizeof(buf1));
+				enc.finish2();
+				buf1[0] = buf2[0];
+				bytes += sizeof(buf1);
+			}
+			end = OSUtils::now();
+			if ((end - start) >= 5000)
+				break;
+		}
+		std::cout << (((double)bytes / 1048576.0) / ((double)(end - start) / 1024.0)) << " MiB/second" << std::endl;
+	}
+
 	std::cout << "[crypto] Testing SHA-512... "; std::cout.flush();
-	SHA512::hash(buf1,sha512TV0Input,(unsigned int)strlen(sha512TV0Input));
+	SHA512(buf1,sha512TV0Input,(unsigned int)strlen(sha512TV0Input));
 	if (memcmp(buf1,sha512TV0Digest,64)) {
 		std::cout << "FAIL" << std::endl;
 		return -1;
@@ -346,7 +400,7 @@ static int testCrypto()
 		C25519::agree(p1,p2.pub,buf1,64);
 		C25519::agree(p2,p1.pub,buf2,64);
 		C25519::agree(p3,p1.pub,buf3,64);
-		// p1<>p2 should equal p1<>p2
+		// p1<>p2 should equal p2<>p1
 		if (memcmp(buf1,buf2,64)) {
 			std::cout << "FAIL (1)" << std::endl;
 			return -1;
@@ -536,8 +590,8 @@ static int testCertificate()
 	std::cout << idA.address().toString(buf) << ", " << idB.address().toString(buf) << std::endl;
 
 	std::cout << "[certificate] Generating certificates A and B...";
-	CertificateOfMembership cA(10000,100,1,idA.address());
-	CertificateOfMembership cB(10099,100,1,idB.address());
+	CertificateOfMembership cA(10000,100,1,idA);
+	CertificateOfMembership cB(10099,100,1,idB);
 	std::cout << std::endl;
 
 	std::cout << "[certificate] Signing certificates A and B with authority...";
@@ -549,13 +603,13 @@ static int testCertificate()
 	//std::cout << "[certificate] B: " << cB.toString() << std::endl;
 
 	std::cout << "[certificate] A agrees with B and B with A... ";
-	if (cA.agreesWith(cB))
+	if (cA.agreesWith(cB, idB))
 		std::cout << "yes, ";
 	else {
 		std::cout << "FAIL" << std::endl;
 		return -1;
 	}
-	if (cB.agreesWith(cA))
+	if (cB.agreesWith(cA, idA))
 		std::cout << "yes." << std::endl;
 	else {
 		std::cout << "FAIL" << std::endl;
@@ -563,18 +617,18 @@ static int testCertificate()
 	}
 
 	std::cout << "[certificate] Generating two certificates that should not agree...";
-	cA = CertificateOfMembership(10000,100,1,idA.address());
-	cB = CertificateOfMembership(10101,100,1,idB.address());
+	cA = CertificateOfMembership(10000,100,1,idA);
+	cB = CertificateOfMembership(10101,100,1,idB);
 	std::cout << std::endl;
 
 	std::cout << "[certificate] A agrees with B and B with A... ";
-	if (!cA.agreesWith(cB))
+	if (!cA.agreesWith(cB, idB))
 		std::cout << "no, ";
 	else {
 		std::cout << "FAIL" << std::endl;
 		return -1;
 	}
-	if (!cB.agreesWith(cA))
+	if (!cB.agreesWith(cA, idA))
 		std::cout << "no." << std::endl;
 	else {
 		std::cout << "FAIL" << std::endl;
@@ -613,12 +667,12 @@ static int testPacket()
 
 	std::cout << "(compressed: " << complen << ", decompressed: " << a.size() << ") ";
 	if (a != b) {
-		std::cout << "FAIL (compresssion)" << std::endl;
+		std::cout << "FAIL (compression)" << std::endl;
 		return -1;
 	}
 
-	a.armor(salsaKey,true);
-	if (!a.dearmor(salsaKey)) {
+	a.armor(salsaKey,true,nullptr);
+	if (!a.dearmor(salsaKey,nullptr)) {
 		std::cout << "FAIL (encrypt-decrypt/verify)" << std::endl;
 		return -1;
 	}
