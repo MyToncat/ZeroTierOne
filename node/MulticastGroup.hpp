@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -92,10 +92,11 @@ public:
 	inline bool operator!=(const MulticastGroup &g) const { return ((_mac != g._mac)||(_adi != g._adi)); }
 	inline bool operator<(const MulticastGroup &g) const
 	{
-		if (_mac < g._mac)
+		if (_mac < g._mac) {
 			return true;
-		else if (_mac == g._mac)
+		} else if (_mac == g._mac) {
 			return (_adi < g._adi);
+		}
 		return false;
 	}
 	inline bool operator>(const MulticastGroup &g) const { return (g < *this); }

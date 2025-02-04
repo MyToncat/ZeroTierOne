@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -21,6 +21,7 @@
 #include "OSUtils.hpp"
 #include "MacEthernetTap.hpp"
 #include "MacEthernetTapAgent.h"
+#include "MacDNSHelper.hpp"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -54,13 +55,17 @@
 #include <map>
 #include <set>
 #include <algorithm>
+#include <filesystem>
 
 static const ZeroTier::MulticastGroup _blindWildcardMulticastGroup(ZeroTier::MAC(0xff),0);
+
+#define MACOS_FETH_MAX_MTU_SYSCTL "net.link.fake.max_mtu"
 
 namespace ZeroTier {
 
 static Mutex globalTapCreateLock;
 static bool globalTapInitialized = false;
+static bool fethMaxMtuAdjusted = false;
 
 MacEthernetTap::MacEthernetTap(
 	const char *homePath,
@@ -77,6 +82,7 @@ MacEthernetTap::MacEthernetTap(
 	_homePath(homePath),
 	_mtu(mtu),
 	_metric(metric),
+	_devNo(0),
 	_agentStdin(-1),
 	_agentStdout(-1),
 	_agentStderr(-1),
@@ -84,7 +90,8 @@ MacEthernetTap::MacEthernetTap(
 	_agentStdout2(-1),
 	_agentStderr2(-1),
 	_agentPid(-1),
-	_enabled(true)
+	_enabled(true),
+	_lastIfAddrsUpdate(0)
 {
 	char ethaddr[64],mtustr[16],devnostr[16],devstr[16],metricstr[16];
 	OSUtils::ztsnprintf(ethaddr,sizeof(ethaddr),"%.2x:%.2x:%.2x:%.2x:%.2x:%.2x",(int)mac[0],(int)mac[1],(int)mac[2],(int)mac[3],(int)mac[4],(int)mac[5]);
@@ -95,9 +102,17 @@ MacEthernetTap::MacEthernetTap(
 	agentPath.push_back(ZT_PATH_SEPARATOR);
 	agentPath.append("MacEthernetTapAgent");
 	if (!OSUtils::fileExists(agentPath.c_str()))
-		throw std::runtime_error("MacEthernetTapAgent not installed in ZeroTier home");
+		throw std::runtime_error("MacEthernetTapAgent not present in ZeroTier home");
 
 	Mutex::Lock _gl(globalTapCreateLock); // only make one at a time
+
+	if (!fethMaxMtuAdjusted) {
+		fethMaxMtuAdjusted = true;
+		int old_mtu = 0;
+		size_t old_mtu_len = sizeof(old_mtu);
+		int mtu = 10000;
+		sysctlbyname(MACOS_FETH_MAX_MTU_SYSCTL, &old_mtu, &old_mtu_len, &mtu, sizeof(mtu));
+	}
 
 	// Destroy all feth devices on first tap start in case ZeroTier did not exit cleanly last time.
 	// We leave interfaces less than feth100 alone in case something else is messing with feth devices.
@@ -108,7 +123,9 @@ MacEthernetTap::MacEthernetTap(
 		if (!getifaddrs(&ifa)) {
 			struct ifaddrs *p = ifa;
 			while (p) {
-				if ((!strncmp(p->ifa_name,"feth",4))&&(strlen(p->ifa_name) >= 7)&&(deleted.count(std::string(p->ifa_name)) == 0)) {
+				int nameLen = (int)strlen(p->ifa_name);
+				// Delete feth# from feth0 to feth9999, but don't touch >10000.
+				if ((!strncmp(p->ifa_name,"feth",4))&&(nameLen >= 5)&&(nameLen <= 8)&&(deleted.count(std::string(p->ifa_name)) == 0)) {
 					deleted.insert(std::string(p->ifa_name));
 					const char *args[4];
 					args[0] = "/sbin/ifconfig";
@@ -152,10 +169,11 @@ MacEthernetTap::MacEthernetTap(
 			if (devNo < 100)
 				devNo = 100;
 		} else {
+			_dev = devstr;
+			_devNo = devNo;
 			break;
 		}
 	}
-	_dev = devstr;
 
 	if (::pipe(_shutdownSignalPipe))
 		throw std::runtime_error("pipe creation failed");
@@ -192,28 +210,82 @@ MacEthernetTap::MacEthernetTap(
 		::_exit(-1);
 	} else {
 		_agentPid = apid;
+
+		// Wait up to 10 seconds for the subprocess to actually create the device. This prevents
+		// things like routes from being created before the device exists.
+		for(int waitLoops=0;;++waitLoops) {
+			struct ifaddrs *ifa = (struct ifaddrs *)0;
+			if (!getifaddrs(&ifa)) {
+				struct ifaddrs *p = ifa;
+				while (p) {
+					if ((p->ifa_name)&&(!strcmp(devstr, p->ifa_name))) {
+						waitLoops = -1;
+						break;
+					}
+					p = p->ifa_next;
+				}
+				freeifaddrs(ifa);
+			}
+			if (waitLoops == -1) {
+				break;
+			} else if (waitLoops >= 100) { // 10 seconds
+				throw std::runtime_error("feth device creation timed out");
+			}
+			Thread::sleep(100);
+		}
 	}
-	Thread::sleep(100); // this causes them to come up in a more user-friendly order on launch
 
 	_thread = Thread::start(this);
 }
 
 MacEthernetTap::~MacEthernetTap()
 {
+	char tmp[64];
+	const char *args[4];
+	pid_t pid0,pid1;
+
+	MacDNSHelper::removeDNS(_nwid);
+	MacDNSHelper::removeIps4(_nwid);
+	MacDNSHelper::removeIps6(_nwid);
+
 	Mutex::Lock _gl(globalTapCreateLock);
 	::write(_shutdownSignalPipe[1],"\0",1); // causes thread to exit
-	Thread::join(_thread);
-	::close(_shutdownSignalPipe[0]);
-	::close(_shutdownSignalPipe[1]);
+
 	int ec = 0;
-	::kill(_agentPid,SIGTERM);
+	::kill(_agentPid,SIGKILL);
 	::waitpid(_agentPid,&ec,0);
-	::close(_agentStdin);
-	::close(_agentStdout);
-	::close(_agentStderr);
-	::close(_agentStdin2);
-	::close(_agentStdout2);
-	::close(_agentStderr2);
+
+	args[0] = "/sbin/ifconfig";
+	args[1] = _dev.c_str();
+	args[2] = "destroy";
+	args[3] = (char *)0;
+	pid0 = vfork();
+	if (pid0 == 0) {
+		execv(args[0],const_cast<char **>(args));
+		_exit(-1);
+	}
+
+	snprintf(tmp,sizeof(tmp),"feth%u",_devNo + 5000);
+	//args[0] = "/sbin/ifconfig";
+	args[1] = tmp;
+	//args[2] = "destroy";
+	//args[3] = (char *)0;
+	pid1 = vfork();
+	if (pid1 == 0) {
+		execv(args[0],const_cast<char **>(args));
+		_exit(-1);
+	}
+
+	if (pid0 > 0) {
+		int rv = 0;
+		waitpid(pid0,&rv,0);
+	}
+	if (pid1 > 0) {
+		int rv = 0;
+		waitpid(pid1,&rv,0);
+	}
+
+	Thread::join(_thread);
 }
 
 void MacEthernetTap::setEnabled(bool en) { _enabled = en; }
@@ -271,8 +343,16 @@ bool MacEthernetTap::removeIp(const InetAddress &ip)
 
 std::vector<InetAddress> MacEthernetTap::ips() const
 {
+	uint64_t now = OSUtils::now();
+
+	if ((now - _lastIfAddrsUpdate) <= GETIFADDRS_CACHE_TIME) {
+		return _ifaddrs;
+	}
+	_lastIfAddrsUpdate = now;
+
 	struct ifaddrs *ifa = (struct ifaddrs *)0;
 	std::vector<InetAddress> r;
+
 	if (!getifaddrs(&ifa)) {
 		struct ifaddrs *p = ifa;
 		while (p) {
@@ -298,6 +378,9 @@ std::vector<InetAddress> MacEthernetTap::ips() const
 	}
 	std::sort(r.begin(),r.end());
 	r.erase(std::unique(r.begin(),r.end()),r.end());
+
+	_ifaddrs = r;
+
 	return r;
 }
 
@@ -450,6 +533,20 @@ void MacEthernetTap::threadMain()
 			*/
 		}
 	}
+
+	::close(_agentStdin);
+	::close(_agentStdout);
+	::close(_agentStderr);
+	::close(_agentStdin2);
+	::close(_agentStdout2);
+	::close(_agentStderr2);
+	::close(_shutdownSignalPipe[0]);
+	::close(_shutdownSignalPipe[1]);
+}
+
+void MacEthernetTap::setDns(const char *domain, const std::vector<InetAddress> &servers)
+{
+	MacDNSHelper::setDNS(this->_nwid, domain, servers);
 }
 
 } // namespace ZeroTier

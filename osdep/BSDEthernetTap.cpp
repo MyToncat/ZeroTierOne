@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -39,7 +39,9 @@
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/route.h>
+#include <pthread_np.h>
 
+#include <sched.h>
 #include <string>
 #include <map>
 #include <set>
@@ -53,6 +55,7 @@
 #include "BSDEthernetTap.hpp"
 
 #define ZT_BASE32_CHARS "0123456789abcdefghijklmnopqrstuv"
+#define ZT_TAP_BUF_SIZE (1024 * 16)
 
 // ff:ff:ff:ff:ff:ff with no ADI
 static const ZeroTier::MulticastGroup _blindWildcardMulticastGroup(ZeroTier::MAC(0xff),0);
@@ -61,6 +64,8 @@ namespace ZeroTier {
 
 BSDEthernetTap::BSDEthernetTap(
 	const char *homePath,
+	unsigned int concurrency,
+	bool pinning,
 	const MAC &mac,
 	unsigned int mtu,
 	unsigned int metric,
@@ -69,12 +74,15 @@ BSDEthernetTap::BSDEthernetTap(
 	void (*handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
 	void *arg) :
 	_handler(handler),
+	_concurrency(concurrency),
+	_pinning(pinning),
 	_arg(arg),
 	_nwid(nwid),
 	_mtu(mtu),
 	_metric(metric),
 	_fd(0),
-	_enabled(true)
+	_enabled(true),
+	_lastIfAddrsUpdate(0)
 {
 	static Mutex globalTapCreateLock;
 	char devpath[64],ethaddr[64],mtustr[32],metstr[32],tmpdevname[32];
@@ -106,6 +114,9 @@ BSDEthernetTap::BSDEthernetTap(
 		if (std::find(devFiles.begin(),devFiles.end(),std::string(tmpdevname)) == devFiles.end()) {
 			long cpid = (long)vfork();
 			if (cpid == 0) {
+#ifdef ZT_TRACE
+				fprintf(stderr, "DEBUG: ifconfig %s create" ZT_EOL_S, tmpdevname);
+#endif
 				::execl("/sbin/ifconfig","/sbin/ifconfig",tmpdevname,"create",(const char *)0);
 				::_exit(-1);
 			} else if (cpid > 0) {
@@ -117,6 +128,9 @@ BSDEthernetTap::BSDEthernetTap(
 			if (!stat(devpath,&stattmp)) {
 				cpid = (long)vfork();
 				if (cpid == 0) {
+#ifdef ZT_TRACE
+					fprintf(stderr, "DEBUG: ifconfig %s name %s" ZT_EOL_S, tmpdevname, _dev.c_str());
+#endif
 					::execl("/sbin/ifconfig","/sbin/ifconfig",tmpdevname,"name",_dev.c_str(),(const char *)0);
 					::_exit(-1);
 				} else if (cpid > 0) {
@@ -163,6 +177,9 @@ BSDEthernetTap::BSDEthernetTap(
 	OSUtils::ztsnprintf(metstr,sizeof(metstr),"%u",_metric);
 	long cpid = (long)vfork();
 	if (cpid == 0) {
+#ifdef ZT_TRACE
+		fprintf(stderr, "DEBUG: ifconfig %s lladdr %s mtu %s metric %s up" ZT_EOL_S, _dev.c_str(), ethaddr, mtustr, metstr);
+#endif
 		::execl("/sbin/ifconfig","/sbin/ifconfig",_dev.c_str(),"lladdr",ethaddr,"mtu",mtustr,"metric",metstr,"up",(const char *)0);
 		::_exit(-1);
 	} else if (cpid > 0) {
@@ -185,18 +202,23 @@ BSDEthernetTap::BSDEthernetTap(
 BSDEthernetTap::~BSDEthernetTap()
 {
 	::write(_shutdownSignalPipe[1],"\0",1); // causes thread to exit
-	Thread::join(_thread);
 	::close(_fd);
 	::close(_shutdownSignalPipe[0]);
 	::close(_shutdownSignalPipe[1]);
-
 	long cpid = (long)vfork();
 	if (cpid == 0) {
+#ifdef ZT_TRACE
+			fprintf(stderr, "DEBUG: ifconfig %s destroy" ZT_EOL_S, _dev.c_str());
+#endif
 		::execl("/sbin/ifconfig","/sbin/ifconfig",_dev.c_str(),"destroy",(const char *)0);
 		::_exit(-1);
 	} else if (cpid > 0) {
 		int exitcode = -1;
 		::waitpid(cpid,&exitcode,0);
+	}
+	Thread::join(_thread);
+	for (std::thread &t : _rxThreads) {
+		t.join();
 	}
 }
 
@@ -215,6 +237,9 @@ static bool ___removeIp(const std::string &_dev,const InetAddress &ip)
 	long cpid = (long)vfork();
 	if (cpid == 0) {
 		char ipbuf[64];
+#ifdef ZT_TRACE
+		fprintf(stderr, "DEBUG: ifconfig %s inet %s -alias" ZT_EOL_S, _dev.c_str(), ip.toIpString(ipbuf));
+#endif
 		execl("/sbin/ifconfig","/sbin/ifconfig",_dev.c_str(),"inet",ip.toIpString(ipbuf),"-alias",(const char *)0);
 		_exit(-1);
 	} else if (cpid > 0) {
@@ -245,6 +270,9 @@ bool BSDEthernetTap::addIp(const InetAddress &ip)
 	long cpid = (long)vfork();
 	if (cpid == 0) {
 		char tmp[128];
+#ifdef ZT_TRACE
+		fprintf(stderr, "DEBUG: ifconfig %s %s %s alias" ZT_EOL_S, _dev.c_str(), ip.isV4() ? "inet" : "inet6", ip.toString(tmp));
+#endif
 		::execl("/sbin/ifconfig","/sbin/ifconfig",_dev.c_str(),ip.isV4() ? "inet" : "inet6",ip.toString(tmp),"alias",(const char *)0);
 		::_exit(-1);
 	} else if (cpid > 0) {
@@ -269,6 +297,13 @@ bool BSDEthernetTap::removeIp(const InetAddress &ip)
 
 std::vector<InetAddress> BSDEthernetTap::ips() const
 {
+	uint64_t now = OSUtils::now();
+
+	if ((now - _lastIfAddrsUpdate) <= GETIFADDRS_CACHE_TIME) {
+		return _ifaddrs;
+	}
+	_lastIfAddrsUpdate = now;
+
 	struct ifaddrs *ifa = (struct ifaddrs *)0;
 	if (getifaddrs(&ifa))
 		return std::vector<InetAddress>();
@@ -301,6 +336,8 @@ std::vector<InetAddress> BSDEthernetTap::ips() const
 
 	std::sort(r.begin(),r.end());
 	std::unique(r.begin(),r.end());
+
+	_ifaddrs = r;
 
 	return r;
 }
@@ -375,6 +412,9 @@ void BSDEthernetTap::setMtu(unsigned int mtu)
 		if (cpid == 0) {
 			char tmp[64];
 			OSUtils::ztsnprintf(tmp,sizeof(tmp),"%u",mtu);
+#ifdef ZT_TRACE
+			fprintf(stderr, "DEBUG: ifconfig %s mtu %s" ZT_EOL_S, _dev.c_str(), tmp);
+#endif
 			execl("/sbin/ifconfig","/sbin/ifconfig",_dev.c_str(),"mtu",tmp,(const char *)0);
 			_exit(-1);
 		} else if (cpid > 0) {
@@ -387,54 +427,82 @@ void BSDEthernetTap::setMtu(unsigned int mtu)
 void BSDEthernetTap::threadMain()
 	throw()
 {
-	fd_set readfds,nullfds;
-	MAC to,from;
-	int n,nfds,r;
-	char getBuf[ZT_MAX_MTU + 64];
-
 	// Wait for a moment after startup -- wait for Network to finish
 	// constructing itself.
 	Thread::sleep(500);
 
-	FD_ZERO(&readfds);
-	FD_ZERO(&nullfds);
-	nfds = (int)std::max(_shutdownSignalPipe[0],_fd) + 1;
+#ifndef __OpenBSD__
+	bool pinning = _pinning;
 
-	r = 0;
-	for(;;) {
-		FD_SET(_shutdownSignalPipe[0],&readfds);
-		FD_SET(_fd,&readfds);
-		select(nfds,&readfds,&nullfds,&nullfds,(struct timeval *)0);
+	for (unsigned int i = 0; i < _concurrency; ++i) {
+		_rxThreads.push_back(std::thread([this, i, pinning] {
 
-		if (FD_ISSET(_shutdownSignalPipe[0],&readfds)) // writes to shutdown pipe terminate thread
-			break;
-
-		if (FD_ISSET(_fd,&readfds)) {
-			n = (int)::read(_fd,getBuf + r,sizeof(getBuf) - r);
-			if (n < 0) {
-				if ((errno != EINTR)&&(errno != ETIMEDOUT))
-					break;
-			} else {
-				// Some tap drivers like to send the ethernet frame and the
-				// payload in two chunks, so handle that by accumulating
-				// data until we have at least a frame.
-				r += n;
-				if (r > 14) {
-					if (r > ((int)_mtu + 14)) // sanity check for weird TAP behavior on some platforms
-						r = _mtu + 14;
-
-					if (_enabled) {
-						to.setTo(getBuf,6);
-						from.setTo(getBuf + 6,6);
-						unsigned int etherType = ntohs(((const uint16_t *)getBuf)[6]);
-						_handler(_arg,(void *)0,_nwid,from,to,etherType,0,(const void *)(getBuf + 14),r - 14);
-					}
-
-					r = 0;
+			if (pinning) {
+				int pinCore = i % _concurrency;
+				fprintf(stderr, "Pinning thread %d to core %d\n", i, pinCore);
+				pthread_t self = pthread_self();
+				cpu_set_t cpuset;
+				CPU_ZERO(&cpuset);
+				CPU_SET(pinCore, &cpuset);
+				//int rc = sched_setaffinity(self, sizeof(cpu_set_t), &cpuset);
+				int rc = pthread_setaffinity_np(self, sizeof(cpu_set_t), &cpuset);
+				if (rc != 0)
+				{
+					fprintf(stderr, "Failed to pin thread %d to core %d: %s\n", i, pinCore, strerror(errno));
+					exit(1);
 				}
 			}
-		}
+#endif // __OpenBSD__
+
+			uint8_t b[ZT_TAP_BUF_SIZE];
+			MAC to, from;
+			fd_set readfds, nullfds;
+			int n, nfds, r;
+
+			FD_ZERO(&readfds);
+			FD_ZERO(&nullfds);
+			nfds = (int)std::max(_shutdownSignalPipe[0],_fd) + 1;
+
+			r = 0;
+
+			for(;;) {
+				FD_SET(_shutdownSignalPipe[0],&readfds);
+				FD_SET(_fd,&readfds);
+				select(nfds,&readfds,&nullfds,&nullfds,(struct timeval *)0);
+
+				if (FD_ISSET(_shutdownSignalPipe[0],&readfds)) // writes to shutdown pipe terminate thread
+					break;
+
+				if (FD_ISSET(_fd,&readfds)) {
+					n = (int)::read(_fd,b + r,sizeof(b) - r);
+					if (n < 0) {
+						if ((errno != EINTR)&&(errno != ETIMEDOUT))
+							break;
+					} else {
+						// Some tap drivers like to send the ethernet frame and the
+						// payload in two chunks, so handle that by accumulating
+						// data until we have at least a frame.
+						r += n;
+						if (r > 14) {
+							if (r > ((int)_mtu + 14)) // sanity check for weird TAP behavior on some platforms
+								r = _mtu + 14;
+
+							if (_enabled) {
+								to.setTo(b,6);
+								from.setTo(b + 6,6);
+								unsigned int etherType = ntohs(((const uint16_t *)b)[6]);
+								_handler(_arg,(void *)0,_nwid,from,to,etherType,0,(const void *)(b + 14),r - 14);
+							}
+
+							r = 0;
+						}
+					}
+				}
+			}
+#ifndef __OpenBSD__
+		}));
 	}
+#endif // __OpenBSD__
 }
 
 } // namespace ZeroTier

@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -47,13 +47,8 @@
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
 #else
-#ifdef __ANDROID__
-#include "miniupnpc.h"
-#include "upnpcommands.h"
-#else
 #include "../ext/miniupnpc/miniupnpc.h"
 #include "../ext/miniupnpc/upnpcommands.h"
-#endif
 #endif
 
 #ifdef ZT_USE_SYSTEM_NATPMP
@@ -84,6 +79,7 @@ public:
 		throw()
 	{
 		int mode = 0; // 0 == NAT-PMP, 1 == UPnP
+		int retrytime = 500;
 
 #ifdef ZT_PORTMAPPER_TRACE
 		fprintf(stderr,"PortMapper: started for UDP port %d" ZT_EOL_S,localPort);
@@ -91,6 +87,26 @@ public:
 
 		while (run) {
 
+			{
+				// use initnatpmp to check if we can bind a port at all
+				natpmp_t _natpmp;
+				int result = initnatpmp(&_natpmp,0,0);
+				if (result == NATPMP_ERR_CANNOTGETGATEWAY || result == NATPMP_ERR_SOCKETERROR) {
+					closenatpmp(&_natpmp);
+#ifdef ZT_PORTMAPPER_TRACE
+					PM_TRACE("PortMapper: init failed %d. You might not have an internet connection yet. Trying again in %d" ZT_EOL_S, result, retrytime);
+#endif
+					Thread::sleep(retrytime);
+					retrytime = retrytime * 2;
+					if (retrytime > ZT_PORTMAPPER_REFRESH_DELAY / 10) {
+						retrytime = ZT_PORTMAPPER_REFRESH_DELAY / 10;
+					}
+					continue;
+				} else {
+					closenatpmp(&_natpmp);
+					retrytime = 500;
+				}
+			}
 			// ---------------------------------------------------------------------
 			// NAT-PMP mode (preferred)
 			// ---------------------------------------------------------------------
@@ -177,6 +193,7 @@ public:
 #ifdef ZT_PORTMAPPER_TRACE
                     PM_TRACE("PortMapper: NAT-PMP: request failed, switching to UPnP mode" ZT_EOL_S);
 #endif
+					continue;
 				}
 			}
 			// ---------------------------------------------------------------------
@@ -212,7 +229,8 @@ public:
 					memset(&data,0,sizeof(data));
 					OSUtils::ztsnprintf(inport,sizeof(inport),"%d",localPort);
 
-					if ((UPNP_GetValidIGD(devlist,&urls,&data,lanaddr,sizeof(lanaddr)))&&(lanaddr[0])) {
+					int foundValidIGD = 0;
+					if ((foundValidIGD = UPNP_GetValidIGD(devlist,&urls,&data,lanaddr,sizeof(lanaddr)))&&(lanaddr[0])) {
 #ifdef ZT_PORTMAPPER_TRACE
                         PM_TRACE("PortMapper: UPnP: my LAN IP address: %s" ZT_EOL_S,lanaddr);
 #endif
@@ -287,9 +305,11 @@ public:
                         PM_TRACE("PortMapper: UPnP: UPNP_GetValidIGD failed, returning to NAT-PMP mode" ZT_EOL_S);
 #endif
 					}
-
 					freeUPNPDevlist(devlist);
 
+					if(foundValidIGD) {
+						FreeUPNPUrls(&urls);
+					}
 				} else {
 					mode = 0;
 #ifdef ZT_PORTMAPPER_TRACE

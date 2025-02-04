@@ -8,11 +8,12 @@ package com.zerotier.sdk;
 import java.net.InetSocketAddress;
 
 public interface PathChecker {
+
     /**
      * Callback to check whether a path should be used for ZeroTier traffic
-     *
+     * <p>
      * This function must return true if the path should be used.
-     *
+     * <p>
      * If no path check function is specified, ZeroTier will still exclude paths
      * that overlap with ZeroTier-assigned and managed IP address blocks. But the
      * use of a path check function is recommended to ensure that recursion does
@@ -21,19 +22,20 @@ public interface PathChecker {
      * all configured ZeroTier interfaces and check to ensure that the supplied
      * addresses will not result in ZeroTier traffic being sent over a ZeroTier
      * interface (recursion).
-     *
+     * <p>
      * Obviously this is not required in configurations where this can't happen,
      * such as network containers or embedded.
      *
      * @param ztAddress ZeroTier address or 0 for none/any
      * @param localSocket Local interface socket.  -1 if unspecified
      * @param remoteAddress remote address
+     * @return true if the path should be used
      */
     boolean onPathCheck(long ztAddress, long localSocket, InetSocketAddress remoteAddress);
 
     /**
      * Function to get physical addresses for ZeroTier peers
-     *
+     * <p>
      * If provided this function will be occasionally called to get physical
      * addresses that might be tried to reach a ZeroTier address.
      *

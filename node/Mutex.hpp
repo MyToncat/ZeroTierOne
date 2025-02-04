@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -23,69 +23,6 @@
 #include <pthread.h>
 
 namespace ZeroTier {
-
-#if defined(__GNUC__) && (defined(__amd64) || defined(__amd64__) || defined(__x86_64) || defined(__x86_64__) || defined(__AMD64) || defined(__AMD64__) || defined(_M_X64))
-
-// Inline ticket lock on x64 systems with GCC and CLANG (Mac, Linux) -- this is really fast as long as locking durations are very short
-class Mutex
-{
-public:
-	Mutex() :
-		nextTicket(0),
-		nowServing(0)
-	{
-	}
-
-	inline void lock() const
-	{
-		const uint16_t myTicket = __sync_fetch_and_add(&(const_cast<Mutex *>(this)->nextTicket),1);
-		while (nowServing != myTicket) {
-			__asm__ __volatile__("rep;nop"::);
-			__asm__ __volatile__("":::"memory");
-		}
-	}
-
-	inline void unlock() const
-	{
-		++(const_cast<Mutex *>(this)->nowServing);
-	}
-
-	/**
-	 * Uses C++ contexts and constructor/destructor to lock/unlock automatically
-	 */
-	class Lock
-	{
-	public:
-		Lock(Mutex &m) :
-			_m(&m)
-		{
-			m.lock();
-		}
-
-		Lock(const Mutex &m) :
-			_m(const_cast<Mutex *>(&m))
-		{
-			_m->lock();
-		}
-
-		~Lock()
-		{
-			_m->unlock();
-		}
-
-	private:
-		Mutex *const _m;
-	};
-
-private:
-	Mutex(const Mutex &) {}
-	const Mutex &operator=(const Mutex &) { return *this; }
-
-	uint16_t nextTicket;
-	uint16_t nowServing;
-};
-
-#else
 
 // libpthread based mutex lock
 class Mutex
@@ -142,16 +79,14 @@ private:
 	pthread_mutex_t _mh;
 };
 
-#endif
-
 } // namespace ZeroTier
 
-#endif // Apple / Linux
+#endif
 
 #ifdef __WINDOWS__
 
 #include <stdlib.h>
-#include <Windows.h>
+#include <windows.h>
 
 namespace ZeroTier {
 

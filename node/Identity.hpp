@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -56,8 +56,9 @@ public:
 	Identity(const char *str) :
 		_privateKey((C25519::Private *)0)
 	{
-		if (!fromString(str))
+		if (!fromString(str)) {
 			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_TYPE;
+		}
 	}
 
 	template<unsigned int C>
@@ -80,8 +81,9 @@ public:
 		_address = id._address;
 		_publicKey = id._publicKey;
 		if (id._privateKey) {
-			if (!_privateKey)
+			if (!_privateKey) {
 				_privateKey = new C25519::Private();
+			}
 			*_privateKey = *(id._privateKey);
 		} else {
 			delete _privateKey;
@@ -110,6 +112,18 @@ public:
 	inline bool hasPrivate() const { return (_privateKey != (C25519::Private *)0); }
 
 	/**
+	 * Compute a SHA384 hash of this identity's address and public key(s).
+	 * 
+	 * @param sha384buf Buffer with 48 bytes of space to receive hash
+	 */
+	inline void publicKeyHash(void *sha384buf) const
+	{
+		uint8_t address[ZT_ADDRESS_LENGTH];
+		_address.copyTo(address, ZT_ADDRESS_LENGTH);
+		SHA384(sha384buf, address, ZT_ADDRESS_LENGTH, _publicKey.data, ZT_C25519_PUBLIC_KEY_LEN);
+	}
+
+	/**
 	 * Compute the SHA512 hash of our private key (if we have one)
 	 *
 	 * @param sha Buffer to receive SHA512 (MUST be ZT_SHA512_DIGEST_LEN (64) bytes in length)
@@ -118,7 +132,7 @@ public:
 	inline bool sha512PrivateKey(void *sha) const
 	{
 		if (_privateKey) {
-			SHA512::hash(sha,_privateKey->data,ZT_C25519_PRIVATE_KEY_LEN);
+			SHA512(sha,_privateKey->data,ZT_C25519_PRIVATE_KEY_LEN);
 			return true;
 		}
 		return false;
@@ -132,8 +146,9 @@ public:
 	 */
 	inline C25519::Signature sign(const void *data,unsigned int len) const
 	{
-		if (_privateKey)
+		if (_privateKey) {
 			return C25519::sign(*_privateKey,_publicKey,data,len);
+		}
 		throw ZT_EXCEPTION_PRIVATE_KEY_REQUIRED;
 	}
 
@@ -148,8 +163,9 @@ public:
 	 */
 	inline bool verify(const void *data,unsigned int len,const void *signature,unsigned int siglen) const
 	{
-		if (siglen != ZT_C25519_SIGNATURE_LEN)
+		if (siglen != ZT_C25519_SIGNATURE_LEN) {
 			return false;
+		}
 		return C25519::verify(_publicKey,data,len,signature);
 	}
 
@@ -173,13 +189,12 @@ public:
 	 *
 	 * @param id Identity to agree with
 	 * @param key Result parameter to fill with key bytes
-	 * @param klen Length of key in bytes
 	 * @return Was agreement successful?
 	 */
-	inline bool agree(const Identity &id,void *key,unsigned int klen) const
+	inline bool agree(const Identity &id,void *const key) const
 	{
 		if (_privateKey) {
-			C25519::agree(*_privateKey,id._publicKey,key,klen);
+			C25519::agree(*_privateKey,id._publicKey,key,ZT_SYMMETRIC_KEY_SIZE);
 			return true;
 		}
 		return false;
@@ -206,7 +221,9 @@ public:
 		if ((_privateKey)&&(includePrivate)) {
 			b.append((unsigned char)ZT_C25519_PRIVATE_KEY_LEN);
 			b.append(_privateKey->data,ZT_C25519_PRIVATE_KEY_LEN);
-		} else b.append((unsigned char)0);
+		} else {
+			b.append((unsigned char)0);
+		}
 	}
 
 	/**
@@ -232,16 +249,18 @@ public:
 		_address.setTo(b.field(p,ZT_ADDRESS_LENGTH),ZT_ADDRESS_LENGTH);
 		p += ZT_ADDRESS_LENGTH;
 
-		if (b[p++] != 0)
+		if (b[p++] != 0) {
 			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_TYPE;
+		}
 
 		memcpy(_publicKey.data,b.field(p,ZT_C25519_PUBLIC_KEY_LEN),ZT_C25519_PUBLIC_KEY_LEN);
 		p += ZT_C25519_PUBLIC_KEY_LEN;
 
 		unsigned int privateKeyLength = (unsigned int)b[p++];
 		if (privateKeyLength) {
-			if (privateKeyLength != ZT_C25519_PRIVATE_KEY_LEN)
+			if (privateKeyLength != ZT_C25519_PRIVATE_KEY_LEN) {
 				throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN;
+			}
 			_privateKey = new C25519::Private();
 			memcpy(_privateKey->data,b.field(p,ZT_C25519_PRIVATE_KEY_LEN),ZT_C25519_PRIVATE_KEY_LEN);
 			p += ZT_C25519_PRIVATE_KEY_LEN;
@@ -282,9 +301,11 @@ public:
 	{
 		C25519::Pair pair;
 		pair.pub = _publicKey;
-		if (_privateKey)
+		if (_privateKey) {
 			pair.priv = *_privateKey;
-		else memset(pair.priv.data,0,ZT_C25519_PRIVATE_KEY_LEN);
+		} else {
+			memset(pair.priv.data,0,ZT_C25519_PRIVATE_KEY_LEN);
+		}
 		return pair;
 	}
 

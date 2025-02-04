@@ -1,10 +1,10 @@
 /*
- * Copyright (c)2019 ZeroTier, Inc.
+ * Copyright (c)2013-2020 ZeroTier, Inc.
  *
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -26,6 +26,7 @@
 #include "Address.hpp"
 #include "Poly1305.hpp"
 #include "Salsa20.hpp"
+#include "AES.hpp"
 #include "Utils.hpp"
 #include "Buffer.hpp"
 
@@ -55,10 +56,13 @@
  *    + Tags and Capabilities
  *    + Inline push of CertificateOfMembership deprecated
  * 9  - 1.2.0 ... 1.2.14
- * 10 - 1.4.0 ... CURRENT
- *    + Multipath capability and load balancing
+ * 10 - 1.4.0 ... 1.4.6
+ * 11 - 1.4.7 ... 1.4.8
+ *    + Multipath capability and load balancing (beta)
+ * 12 - 1.4.8 ... CURRENT (1.4 series)
+ *    + AES-GMAC-SIV backported for faster peer-to-peer crypto
  */
-#define ZT_PROTO_VERSION 10
+#define ZT_PROTO_VERSION 12
 
 /**
  * Minimum supported protocol version
@@ -95,6 +99,21 @@
  * Curve25519 elliptic curve Diffie-Hellman.
  */
 #define ZT_PROTO_CIPHER_SUITE__C25519_POLY1305_SALSA2012 1
+
+/**
+ * AES-GMAC-SIV backported from 2.x
+ */
+#define ZT_PROTO_CIPHER_SUITE__AES_GMAC_SIV 3
+
+/**
+ * AES-GMAC-SIV first of two keys
+ */
+#define ZT_KBKDF_LABEL_AES_GMAC_SIV_K0 '0'
+
+/**
+ * AES-GMAC-SIV second of two keys
+ */
+#define ZT_KBKDF_LABEL_AES_GMAC_SIV_K1 '1'
 
 /**
  * Cipher suite: NONE
@@ -442,8 +461,9 @@ public:
 		 */
 		inline void init(const Packet &p,unsigned int fragStart,unsigned int fragLen,unsigned int fragNo,unsigned int fragTotal)
 		{
-			if ((fragStart + fragLen) > p.size())
+			if ((fragStart + fragLen) > p.size()) {
 				throw ZT_EXCEPTION_OUT_OF_BOUNDS;
+			}
 			setSize(fragLen + ZT_PROTO_MIN_FRAGMENT_LENGTH);
 
 			// NOTE: this copies both the IV/packet ID and the destination address.
@@ -773,6 +793,12 @@ public:
 		 *
 		 * ERROR response payload:
 		 *   <[8] 64-bit network ID>
+     *   <[2] 16-bit length of error-related data (optional)>
+     *   <[...] error-related data (optional)>
+     * 
+     * Error related data is a Dictionary containing things like a URL
+     * for authentication or a human-readable error message, and is
+     * optional and may be absent or empty.
 		 */
 		VERB_NETWORK_CONFIG_REQUEST = 0x0b,
 
@@ -931,13 +957,13 @@ public:
 		 *
 		 * Upon receipt of this packet, the local peer will verify that the correct
 		 * number of bytes were received by the remote peer. If these values do
-		 * not agree that could be an indicator of packet loss.
+		 * not agree that could be an indication of packet loss.
 		 *
 		 * Additionally, the local peer knows the interval of time that has
 		 * elapsed since the last received ACK. With this information it can compute
 		 * a rough estimate of the current throughput.
 		 *
-		 * This is sent at a maximum rate of once per every ZT_PATH_ACK_INTERVAL
+		 * This is sent at a maximum rate of once per every ZT_QOS_ACK_INTERVAL
 		 */
 		VERB_ACK = 0x12,
 
@@ -963,7 +989,8 @@ public:
 		 * measure of the amount of time between when a packet was received and the
 		 * egress time of its tracking QoS packet.
 		 *
-		 * This is sent at a maximum rate of once per every ZT_PATH_QOS_INTERVAL
+		 * This is sent at a maximum rate of once per every
+		 * ZT_QOS_MEASUREMENT_INTERVAL
 		 */
 		VERB_QOS_MEASUREMENT = 0x13,
 
@@ -996,7 +1023,34 @@ public:
 		 * node on startup. This is helpful in identifying traces from different
 		 * members of a cluster.
 		 */
-		VERB_REMOTE_TRACE = 0x15
+		VERB_REMOTE_TRACE = 0x15,
+
+		/**
+		 * A request to a peer to use a specific path in a multi-path scenario:
+		 * <[2] 16-bit unsigned integer that encodes a path choice utility>
+		 *
+		 * This is sent when a node operating in multipath mode observes that
+		 * its inbound and outbound traffic aren't going over the same path. The
+		 * node will compute its perceived utility for using its chosen outbound
+		 * path and send this to a peer in an attempt to petition it to send
+		 * its traffic over this same path.
+		 *
+		 * Scenarios:
+		 *
+		 * (1) Remote peer utility is GREATER than ours:
+		 *     - Remote peer will refuse the petition and continue using current path
+		 * (2) Remote peer utility is LESS than than ours:
+		 *     - Remote peer will accept the petition and switch to our chosen path
+		 * (3) Remote peer utility is EQUAL to our own:
+		 *     - To prevent confusion and flapping, both side will agree to use the
+		 *       numerical values of their identities to determine which path to use.
+		 *       The peer with the greatest identity will win.
+		 *
+		 * If a node petitions a peer repeatedly with no effect it will regard
+		 * that as a refusal by the remote peer, in this case if the utility is
+		 * negligible it will voluntarily switch to the remote peer's chosen path.
+		 */
+		VERB_PATH_NEGOTIATION_REQUEST = 0x16
 	};
 
 	/**
@@ -1029,7 +1083,10 @@ public:
 		ERROR_NETWORK_ACCESS_DENIED_ = 0x07, /* extra _ at end to avoid Windows name conflict */
 
 		/* Multicasts to this group are not wanted */
-		ERROR_UNWANTED_MULTICAST = 0x08
+		ERROR_UNWANTED_MULTICAST = 0x08,
+
+    /* Network requires external or 2FA authentication (e.g. SSO). */
+    ERROR_NETWORK_AUTHENTICATION_REQUIRED = 0x09
 	};
 
 	template<unsigned int C2>
@@ -1161,9 +1218,11 @@ public:
 	 */
 	inline void setFragmented(bool f)
 	{
-		if (f)
+		if (f) {
 			(*this)[ZT_PACKET_IDX_FLAGS] |= (char)ZT_PROTO_FLAG_FRAGMENTED;
-		else (*this)[ZT_PACKET_IDX_FLAGS] &= (char)(~ZT_PROTO_FLAG_FRAGMENTED);
+		} else {
+			(*this)[ZT_PACKET_IDX_FLAGS] &= (char)(~ZT_PROTO_FLAG_FRAGMENTED);
+		}
 	}
 
 	/**
@@ -1194,6 +1253,14 @@ public:
 	}
 
 	/**
+	 * @return Whether this packet is currently encrypted
+	 */
+	inline bool isEncrypted() const
+	{
+		return (cipher() == ZT_PROTO_CIPHER_SUITE__C25519_POLY1305_SALSA2012) || (cipher() == ZT_PROTO_CIPHER_SUITE__AES_GMAC_SIV);
+	}
+
+	/**
 	 * Set this packet's cipher suite
 	 */
 	inline void setCipher(unsigned int c)
@@ -1201,9 +1268,11 @@ public:
 		unsigned char &b = (*this)[ZT_PACKET_IDX_FLAGS];
 		b = (b & 0xc7) | (unsigned char)((c << 3) & 0x38); // bits: FFCCCHHH
 		// Set DEPRECATED "encrypted" flag -- used by pre-1.0.3 peers
-		if (c == ZT_PROTO_CIPHER_SUITE__C25519_POLY1305_SALSA2012)
+		if (c == ZT_PROTO_CIPHER_SUITE__C25519_POLY1305_SALSA2012) {
 			b |= ZT_PROTO_FLAG_ENCRYPTED;
-		else b &= (~ZT_PROTO_FLAG_ENCRYPTED);
+		} else {
+			b &= (~ZT_PROTO_FLAG_ENCRYPTED);
+		}
 	}
 
 	/**
@@ -1267,8 +1336,9 @@ public:
 	 *
 	 * @param key 32-byte key
 	 * @param encryptPayload If true, encrypt packet payload, else just MAC
+	 * @param aesKeys If non-NULL these are the two keys for AES-GMAC-SIV
 	 */
-	void armor(const void *key,bool encryptPayload);
+	void armor(const void *key,bool encryptPayload,const AES aesKeys[2]);
 
 	/**
 	 * Verify and (if encrypted) decrypt packet
@@ -1278,9 +1348,10 @@ public:
 	 * address and MAC field match a trusted path.
 	 *
 	 * @param key 32-byte key
+	 * @param aesKeys If non-NULL these are the two keys for AES-GMAC-SIV
 	 * @return False if packet is invalid or failed MAC authenticity check
 	 */
-	bool dearmor(const void *key);
+	bool dearmor(const void *key,const AES aesKeys[2]);
 
 	/**
 	 * Encrypt/decrypt a separately armored portion of a packet
@@ -1339,8 +1410,9 @@ private:
 
 		// IV and source/destination addresses. Using the addresses divides the
 		// key space into two halves-- A->B and B->A (since order will change).
-		for(unsigned int i=0;i<18;++i) // 8 + (ZT_ADDRESS_LENGTH * 2) == 18
+		for(unsigned int i=0;i<18;++i) { // 8 + (ZT_ADDRESS_LENGTH * 2) == 18
 			out[i] = in[i] ^ d[i];
+		}
 
 		// Flags, but with hop count masked off. Hop count is altered by forwarding
 		// nodes. It's one of the only parts of a packet modifiable by people
@@ -1353,8 +1425,9 @@ private:
 		out[20] = in[20] ^ (unsigned char)((size() >> 8) & 0xff); // little endian
 
 		// Rest of raw key is used unchanged
-		for(unsigned int i=21;i<32;++i)
+		for(unsigned int i=21;i<32;++i) {
 			out[i] = in[i];
+		}
 	}
 };
 

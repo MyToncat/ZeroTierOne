@@ -4,7 +4,7 @@
  * Use of this software is governed by the Business Source License included
  * in the LICENSE.TXT file in the project's root directory.
  *
- * Change Date: 2023-01-01
+ * Change Date: 2026-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2.0 of the Apache License.
@@ -29,13 +29,13 @@
  * is limited to 2048. AF_NDRV packet injection is required to inject
  * ZeroTier's large MTU frames.
  *
- * Benchmarks show that this performs similarly to the old tap.kext driver,
- * and a kext is no longer required. Splitting it off into an agent will
- * also make it easier to have zerotier-one itself drop permissions.
- *
  * All this stuff is basically undocumented. A lot of tracing through
  * the Darwin/XNU kernel source was required to figure out how to make
  * this actually work.
+ *
+ * We hope to develop a DriverKit-based driver in the near-mid future to
+ * replace this weird hack, but it works for now through Big Sur in our
+ * testing.
  *
  * See also:
  *
@@ -64,6 +64,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/resource.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/bpf.h>
@@ -156,7 +157,7 @@ static int run(const char *path,...)
 	args[argNo++] = (char *)0;
 	va_end(ap);
 
-	pid_t pid = vfork();
+	pid_t pid = fork();
 	if (pid < 0) {
 		return -1;
 	} else if (pid == 0) {
@@ -175,10 +176,18 @@ static void die()
 		close(s_ndrvfd);
 	if (s_bpffd >= 0)
 		close(s_bpffd);
-	if (s_deviceName[0])
-		run("/sbin/ifconfig",s_deviceName,"destroy",(char *)0);
 	if (s_peerDeviceName[0])
 		run("/sbin/ifconfig",s_peerDeviceName,"destroy",(char *)0);
+	if (s_deviceName[0])
+		run("/sbin/ifconfig",s_deviceName,"destroy",(char *)0);
+}
+
+static inline void close_inherited_fds()
+{
+	struct rlimit lim;
+	getrlimit(RLIMIT_NOFILE, &lim);
+	for (int i=3,j=(int)lim.rlim_cur;i<j;++i)
+		close(i);
 }
 
 int main(int argc,char **argv)
@@ -205,6 +214,8 @@ int main(int argc,char **argv)
 	signal(SIGKILL,&exit);
 	signal(SIGINT,&exit);
 	signal(SIGPIPE,&exit);
+
+	close_inherited_fds();
 
 	if (getuid() != 0) {
 		if (setuid(0) != 0) {
@@ -247,7 +258,7 @@ int main(int argc,char **argv)
 	usleep(10);
 	run(P_IFCONFIG,s_peerDeviceName,"peer",s_deviceName,(char *)0);
 	usleep(10);
-	run(P_IFCONFIG,s_peerDeviceName,"mtu","16370","up",(char *)0); /* 16370 is the largest MTU MacOS/Darwin seems to allow */
+	run(P_IFCONFIG,s_peerDeviceName,"mtu",mtu,"up",(char *)0);
 	usleep(10);
 	run(P_IFCONFIG,s_deviceName,"mtu",mtu,"metric",metric,"up",(char *)0);
 	usleep(10);

@@ -1,6 +1,279 @@
 ZeroTier Release Notes
 ======
 
+# 2024-10-23 -- Version 1.14.2
+
+  * Fix for missing entitlement on macOS Sequoia.
+  * Fix for a problem correctly parsing local.conf to enable low bandwidth mode.
+  * Increment versions of some dependent libraries.
+  * Other fixes.
+
+# 2024-09-12 -- Version 1.14.1
+
+  * Multithreaded packet I/O support! Currently this is just for Linux and must
+    be enabled in local.conf. It will likely make the largest difference on small
+    multi-core devices where CPU is a bottleneck and high throughput is desired.
+    It may be enabled by default in the future but we want it to be thoroughly
+    tested. It's a little harder than it seems at first glance due to the need
+    to keep packets in sequence and balance load.
+  * Several multipath bug fixes.
+  * Updated the versions on a number of libraries related to OIDC support and HTTP.
+  * MacOS .app now shows the correct version in its Info.plist manifest.
+  * Sanitize MAC addresses in JSON format rules parser.
+  * Some basic information about the platform (OS, CPU architecture) is now reported
+    to network controllers when networks are joined so it can be displayed to
+    network admins and in the future used in policy checking and inventory operations.
+
+# 2024-05-02 -- Version 1.14.0
+
+  * Linux I/O performance improvements under heavy load
+  * Improvements to multipath
+  * Fix for port rebinding "coma" bug after periods offline (some laptop users)
+  * Fixed a rules engine quirk/ambiguity (GitHub Issue #2200)
+  * Controller API enhancements: node names and other node meta-data
+  * Other bug fixes
+
+# 2023-09-12 -- Version 1.12.2
+
+  * More improvements to macOS full tunnel mode.
+  * Faster recovery after changes to physical network settings.
+
+# 2023-08-25 -- Version 1.12.1
+
+  * Minor release to fix a port binding issue in Linux.
+  * Update Debian dependencies.
+  * No changes for other platforms.
+
+# 2023-08-23 -- Version 1.12.0
+
+  * Experimental Windows ARM64 support
+  * Fix numerous sleep/wake issues on macOS and other platforms
+  * Faster recovery after changes to physical network settings
+  * Prometheus compatible metrics support!
+  * Fix full tunnel mode on recent macOS versions
+  * Numerous macOS DNS fixes
+  * 10-30% speed improvement on Linux
+
+# 2023-03-23 -- Version 1.10.6
+
+  * Prevent binding temporary ipv6 addresses on macos (#1910)
+  * Prevent path-learning loops (#1914)
+  * Prevent infinite loop of UAC prompts in tray app
+
+# 2023-03-10 -- Version 1.10.5
+
+ * Fix for high CPU usage bug on Windows
+
+# 2023-03-07 -- Version 1.10.4
+
+ * SECURITY FIX (Windows): this version fixes a file permission problem on
+   Windows that could allow non-privileged users on a Windows system to read
+   privileged files in the ZeroTier service's working directory. This could
+   allow an unprivileged local Windows user to administrate the local ZeroTier
+   instance without appropriate local permissions. This issue is not remotely
+   exploitable unless a remote user can read arbitrary local files, and does
+   not impact other operating systems.
+
+ * Fix a bug in the handling of multiple IP address assignments to virtual
+   interfaces on macOS.
+
+# 2023-02-15 -- Version 1.10.3
+
+ * Fix for duplicate paths in client. Could cause connectivity issues. Affects all platforms.
+ * Fix for Ethernet Tap MTU setting, would not properly apply on Linux.
+ * Fix default route bugs (macOS.)
+ * Enable Ping automatically for ZeroTier Adapters (Windows.)
+ * SSO updates and minor bugfixes.
+ * Add low-bandwidth mode.
+ * Add forceTcpRelay mode (optionally enabled.)
+ * Fix bug that prevented setting of custom TCP relay address.
+ * Build script improvements and bug fixes.
+
+# 2022-11-01 -- Version 1.10.2
+
+ * Fix another SSO "stuck client" issue in zeroidc.
+ * Expose root-reported external IP/port information via the local JSON API for better diagnostics.
+ * Multipath: CLI output improvement for inspecting bonds
+ * Multipath: balance-aware mode
+ * Multipath: Custom policies
+ * Multipath: Link quality measurement improvements
+
+Note that releases are coming few and far between because most of our dev effort is going into version 2.
+
+# 2022-06-27 -- Version 1.10.1
+
+ * Fix an issue that could cause SSO clients to get "stuck" on stale auth URLs.
+ * A few other SSO related bug fixes.
+
+# 2022-06-07 -- Version 1.10.0
+
+ * Fix formatting problem in `zerotier-cli` when using SSO networks.
+ * Fix a few other minor bugs in SSO signin to prepare for general availability.
+ * Remove requirement for webview in desktop UI and instead just make everything available via the tray pulldown/menu. Use [libui-ng](https://github.com/libui-ng/libui-ng) for minor prompt dialogs. Saves space and eliminates installation headaches on Windows.
+ * Fix SSO "spam" bug in desktop UI.
+ * Use system default browser for SSO login so all your plugins, MFA devices, password managers, etc. will work as you have them configured.
+ * Minor fix for bonding/multipath.
+
+# 2022-05-10 -- Version 1.8.10
+
+ * Fixed a bug preventing SSO sign-on on Windows.
+
+# 2022-04-25 -- Version 1.8.9
+
+ * Fixed a long-standing and strange bug that was causing sporadic "phantom" packet authentication failures. Not a security problem but could be behind sporadic reports of link failures under some conditions.
+ * Fixed a memory leak in SSO/OIDC support.
+ * Fixed SSO/OIDC display error on CLI.
+ * Fixed a bug causing nodes to sometimes fail to push certs to each other (primarily affects SSO/OIDC use cases).
+ * Fixed a deadlock bug on leaving SSO/OIDC managed networks.
+ * Added some new Linux distributions to the build subsystem.
+
+# 2022-04-11 -- Version 1.8.8
+
+ * Fix a local privilege escalation bug in the Windows installer.
+ * Dependency fix for some Ubuntu versions.
+ * No changes for other platforms. Windows upgrade recommended, everyone else optional.
+
+# 2022-03-30 -- Version 1.8.7
+
+ * Fix for dependency installations in Windows MSI package.
+ * Fix for desktop UI setup when run by a non-super-user.
+ * Bug fix in local OIDC / SSO support for auth0 and other providers.
+ * Other minor fixes for e.g. old Linux distributions.
+
+# 2022-03-04 -- Version 1.8.6
+
+ * Fixed an issue that could cause the UI to be non-responsive if not joined to any networks.
+ * Fix dependency issues in Debian and RedHat packages for some distributions (Fedora, Mint).
+ * Bumped the peer cache serialization version to prevent "coma" issues on upgrade due to changes in path logic behaving badly with old values.
+
+# 2022-02-22 -- Version 1.8.5
+
+ * Plumbing under the hood for endpoint device SSO support.
+ * Fix in LinuxEthernetTap to tap device support on very old (2.6) Linux kernels.
+ * Fix an issue that could cause self-hosted roots ("moons") to fail to assist peers in making direct links. (GitHub issue #1512)
+ * Merge a series of changes by Joseph Henry (of ZeroTier) that should fix some edge cases where ZeroTier would "forget" valid paths.
+ * Minor multipath improvements for automatic path negotiation.
+
+# 2021-11-30 -- Version 1.8.4
+
+ * Fixed an ugly font problem on some older macOS versions.
+ * Fixed a bug that could cause the desktop tray app control panel to stop opening after a while on Windows.
+ * Fixed a possible double "release" in macOS tray app code that crashed on older macOS versions.
+ * Fixed installation on 32-bit Windows 10.
+ * Fixed a build flags issue that could cause ZeroTier to crash on older ARM32 CPUs.
+
+# 2021-11-15 -- Version 1.8.3
+
+ * Remove problematic spinlock, which was only used on x86_64 anyway. Just use pthread always.
+ * Fix fd leak on MacOS that caused non-responsiveness after some time.
+ * Fix Debian install scripts to set /usr/sbin/nologin as shell on service user.
+ * Fix regression that could prevent managed routes from being deleted.
+ * DesktopUI: Remove NSDate:now() call, now works on MacOS 10.13 or newer!
+
+# 2021-11-08 -- Version 1.8.2
+
+ * Fix multicast on linux.
+ * Fix a bug that could cause the tap adapter to have the wrong MAC on Linux.
+ * Update build flags to possibly support MacOS older than 10.14, but more work needs to be done. It may not work yet.
+ * Fix path variable setting on Windows.
+
+# 2021-10-28 -- Version 1.8.1
+
+ * Fix numerous UI issues from 1.8.0 (never fully released).
+ * Remove support for REALLY ancient 1.1.6 or earlier network controllers.
+ * MacOS IPv6 no longer binds to temporary addresses as these can cause interruptions if they expire.
+ * Added additional hardening against address impersonation on networks (also in 1.6.6).
+ * Fix an issue that could cause clobbering of MacOS IP route settings on restart.
+
+ * NOTE: Windows 7 is no longer supported! Windows 7 users will have to use version 1.6.5 or earlier.
+
+# 2021-09-15 -- Version 1.8.0 (preview release only)
+
+ * A *completely* rewritten desktop UI for Mac and Windows!
+ * Implement a workaround for one potential source of a "coma" bug, which can occur if buggy NATs/routers stop allowing the service to communicate on a given port. ZeroTier now reassigns a new secondary port if it's offline for a while unless a secondary port is manually specified in local.conf. Working around crummy buggy routers is an ongoing effort.
+ * Fix for MacOS MTU capping issue on feth devices
+ * Fix for mistakenly using v6 source addresses for v4 routes on some platforms
+ * Stop binding to temporary IPv6 addresses
+ * Set MAC address before bringing up Linux TAP link
+ * Check if DNS servers need to be applied on macOS
+ * Upgrade json.hpp dependency to version 3.10.2
+
+# 2021-09-21 -- Version 1.6.6
+
+ * Backport COM hash check mitigation against network member impersonation.
+
+# 2021-04-13 -- Version 1.6.5
+
+ * Fix a bug in potential network path filtering that could in some circumstances lead to "software laser" effects.
+ * Fix a printf overflow in zerotier-cli (not exploitable or a security risk)
+ * Windows now looks up the name of ZeroTier devices instead of relying on them having "ZeroTier" in them.
+
+# 2021-02-15 -- Version 1.6.4
+
+ * The groundhog saw his shadow, which meant that the "connection coma" bug still wasn't gone. We think we found it this time.
+
+# 2021-02-02 -- Version 1.6.3
+
+ * Likely fix for GitHub issue #1334, an issue that could cause ZeroTier to
+   go into a "coma" on some networks.
+ * Also groundhog day
+
+# 2020-11-30 -- Version 1.6.2
+
+ * Fix an ARM hardware AES crypto issue (not an exploitable vulnerability).
+ * Fix a Linux network leave hang due to a mutex deadlock.
+
+# 2020-11-24 -- Version 1.6.1
+
+This release fixes some minor bugs and other issues in 1.6.0.
+
+ * Fixed a bug that caused IP addresses in the 203.0.0.0/8 block to be miscategorized as not being in global scope.
+ * Changed Linux builds to (hopefully) fix LXC and SELinux issues.
+ * Fixed unaligned memory access that caused crash on FreeBSD systems on the ARM architecture.
+ * Merged CLI options for controlling bonded devices into the beta multipath code.
+ * Updated Windows driver with Microsoft cross-signing to fix issues on some Windows systems.
+
+# 2020-11-19 -- Version 1.6.0
+
+Version 1.6.0 is a major release that incorporates back-ported features from the 2.0 branch, which is still under development. It also fixes a number of issues.
+
+New features and improvements (including those listed under 1.5.0):
+
+ * **Apple Silicon** (MacOS ARM64) native support via universal binary. ZeroTier now requires the very latest Xcode to build.
+ * **Linux performance improvements** for up to 25% faster tun/tap I/O performance on multi-core systems.
+ * **Multipath support** with modes modeled after the Linux kernel's bonding driver. This includes active-passive and active-active modes with fast failover and load balancing. See section 2.1.5 of the manual.
+ * **DNS configuration** push from network controllers to end nodes, with locally configurable permissions for whether or not push is allowed.
+ * **AES-GMAC-SIV** encryption mode, which is both somewhat more secure and significantly faster than the old Salsa20/12-Poly1305 mode on hardware that supports AES acceleration. This includes virtually all X86-64 chips and most ARM64. This mode is based on AES-SIV and has been audited by Trail of Bits to ensure that it is equivalent security-wise.
+
+Bug fixes:
+
+ * **Managed route assignment fixes** to eliminate missing routes on Linux and what we believe to be the source of sporadic high CPU usage on MacOS.
+ * **Hang on shutdown** issues should be fixed.
+ * **Sporadic multicast outages** should be fixed.
+
+Known remaining issues:
+
+ * AES hardware acceleration is not yet supported on 32-bit ARM, PowerPC (32 or 64), or MIPS (32 or 64) systems. Currently supported are X86-64 and ARM64/AARCH64 with crypto extensions.
+
+# 2020-10-05 -- Version 1.5.0 (actually 1.6.0-beta1)
+
+Version 1.6.0 (1.5.0 is a beta!) is a significant release that incorporates a number of back-ported fixes and features from the ZeroTier 2.0 tree.
+
+Major new features are:
+
+ * **Multipath support** with modes modeled after the Linux kernel's bonding driver. This includes active-passive and active-active modes with fast failover and load balancing. See section 2.1.5 of the manual.
+ * **DNS configuration** push from network controllers to end nodes, with locally configurable permissions for whether or not push is allowed.
+ * **AES-GMAC-SIV** encryption mode, which is both somewhat more secure and significantly faster than the old Salsa20/12-Poly1305 mode on hardware that supports AES acceleration. This includes virtually all X86-64 chips and most ARM64. This mode is based on AES-SIV and has been audited by Trail of Bits to ensure that it is equivalent security-wise.
+
+Known issues that are not yet fixed in this beta:
+
+ * Some Mac users have reported periods of 100% CPU in kernel_task and connection instability after leaving networks that have been joined for a period of time, or needing to kill ZeroTier and restart it to finish leaving a network. This doesn't appear to affect all users and we haven't diagnosed the root cause yet.
+ * The service sometimes hangs on shutdown requiring a kill -9. This also does not affect all systems or users.
+ * AES hardware acceleration is not yet supported on 32-bit ARM, PowerPC (32 or 64), or MIPS (32 or 64) systems. Currently supported are X86-64 and ARM64/AARCH64 with crypto extensions.
+ * Some users have reported multicast/broadcast outages on networks lasting up to 30 seconds. Still investigating.
+
+We're trying to fix all these issues before the 1.6.0 release. Stay tuned.
+
 # 2019-08-30 -- Version 1.4.6
 
  * Update default root list to latest
@@ -99,7 +372,7 @@ ZeroTier Release Notes
 # 2017-04-20 -- Version 1.2.4
 
  * Managed routes are now only bifurcated for the default route. This is a change in behavior, though few people will probably notice. Bifurcating all managed routes was causing more trouble than it was worth for most users.
- * Up to 2X crypto speedup on x86-64 (except Windows, which will take some porting) and 32-bit ARM platforms due to integration of fast assembly language implementations of Salsa20/12 from the [supercop](http://bench.cr.yp.to/supercop.html) code base. These were written by Daniel J. Bernstein and are in the public domain. My Macbook Pro (Core i5 2.8ghz) now does almost 1.5GiB/sec Salsa20/12 per core and a Raspberry Pi got a 2X boost. 64-bit ARM support and Windows support will take some work but should not be too hard.
+ * Up to 2X crypto speedup on x86-64 (except Windows, which will take some porting) and 32-bit ARM platforms due to integration of fast assembly language implementations of Salsa20/12 from the [supercop](http://bench.cr.yp.to/supercop.html) code base. These were written by Daniel J. Bernstein and are in the public domain. My MacBook Pro (Core i5 2.8ghz) now does almost 1.5GiB/sec Salsa20/12 per core and a Raspberry Pi got a 2X boost. 64-bit ARM support and Windows support will take some work but should not be too hard.
  * Refactored code that manages credentials to greatly reduce memory use in most cases. This may also result in a small performance improvement.
  * Reworked and simplified path selection and priority logic to fix path instability and dead path persistence edge cases. There have been some sporadic reports of persistent path instabilities and dead paths hanging around that take minutes to resolve. These have proven difficult to reproduce in house, but hopefully this will fix them. In any case it seems to speed up path establishment in our tests and it makes the code simpler and more readable.
  * Eliminated some unused cruft from the code around path management and in the peer class.

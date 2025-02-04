@@ -5,7 +5,11 @@ This is the actual implementation of ZeroTier One, a service providing connectiv
 
 ### Local Configuration File
 
-A file called `local.conf` in the ZeroTier home folder contains configuration options that apply to the local node. (It does not exist unless you create it). It can be used to set up trusted paths, blacklist physical paths, set up physical path hints for certain nodes, and define trusted upstream devices (federated roots). In a large deployment it can be deployed using a tool like Puppet, Chef, SaltStack, etc. to set a uniform configuration across systems. It's a JSON format file that can also be edited and rewritten by ZeroTier One itself, so ensure that proper JSON formatting is used. 
+A file called `local.conf` in the ZeroTier [home](https://github.com/zerotier/ZeroTierOne/blob/6faca86bb424d0b9643b6efa50571f73310d8276/README.md) folder contains configuration options that apply to the local node. (It does not exist unless you create it). It can be used to set up trusted paths, blacklist physical paths, set up physical path hints for certain nodes, and define trusted upstream devices (federated roots). In a large deployment it can be deployed using a tool like Puppet, Chef, SaltStack, etc. to set a uniform configuration across systems.
+
+It's a JSON format file that can also be edited and rewritten by ZeroTier One itself, so ensure that proper JSON formatting is used. To validate your config, paste it into a website like [jsonlint.com](https://jsonlint.com), or use a tool like `jq`. 
+
+Check the output of `zerotier-cli info -j` to see if your configuration is being loaded.
 
 Settings available in `local.conf` (this is not valid JSON, and JSON does not allow comments):
 
@@ -29,6 +33,7 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 		"secondaryPort": 1-65535, /* If set, override default random secondary port */
 		"tertiaryPort": 1-65535, /* If set, override default random tertiary port */
 		"portMappingEnabled": true|false, /* If true (the default), try to use uPnP or NAT-PMP to map ports */
+		"allowSecondaryPort": true|false /* false will also disable secondary port */
 		"softwareUpdate": "apply"|"download"|"disable", /* Automatically apply updates, just download, or disable built-in software updates */
 		"softwareUpdateChannel": "release"|"beta", /* Software update channel */
 		"softwareUpdateDist": true|false, /* If true, distribute software updates (only really useful to ZeroTier, Inc. itself, default is false) */
@@ -138,6 +143,7 @@ Most network settings are not writable, as they are defined by the network contr
 | allowManaged          | boolean       | Allow IP and route management                     | yes      |
 | allowGlobal           | boolean       | Allow IPs and routes that overlap with global IPs | yes      |
 | allowDefault          | boolean       | Allow overriding of system default route          | yes      |
+| allowDNS              | boolean       | Allow configuration of DNS on network             | yes      |
 
 Route objects:
 
